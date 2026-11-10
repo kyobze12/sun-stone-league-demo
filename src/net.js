@@ -13,6 +13,30 @@ export function makeRoomCode() {
 }
 const peerId = (code) => `sunstone-league-${code.toUpperCase()}`;
 
+/**
+ * Signalling options. By default PeerJS' public cloud brokers the connection;
+ * gameplay itself is always peer-to-peer. A self-hosted broker can be supplied
+ * as `?peer=host[:port][/path]` (remembered afterwards), which is also how the
+ * online mode is tested without reaching the public server.
+ */
+export function peerOptions() {
+  let setting = null;
+  try {
+    const fromUrl = new URLSearchParams(location.search).get('peer');
+    if (fromUrl !== null) {
+      setting = fromUrl.trim();
+      if (setting) localStorage.setItem('ssl-peer', setting); else localStorage.removeItem('ssl-peer');
+    } else setting = localStorage.getItem('ssl-peer');
+  } catch { /* storage unavailable */ }
+  if (!setting) return { debug: 0 };
+  const [hostPart, ...pathParts] = setting.replace(/^wss?:\/\//, '').split('/');
+  const [host, port] = hostPart.split(':');
+  const options = { debug: 0, host, secure: location.protocol === 'https:' };
+  if (port) options.port = Number(port);
+  if (pathParts.length) options.path = '/' + pathParts.join('/');
+  return options;
+}
+
 async function loadPeer() {
   const module = await import('peerjs');
   return module.Peer || module.default;
@@ -26,10 +50,12 @@ export class NetSession {
   }
 
   async host() {
-    const Peer = await loadPeer();
+    // Assigned before the first await so callers can show the room code as
+    // soon as host() is called, rather than racing the peerjs import.
     this.role = 'host';
     this.code = makeRoomCode();
-    this.peer = new Peer(peerId(this.code), { debug: 0 });
+    const Peer = await loadPeer();
+    this.peer = new Peer(peerId(this.code), peerOptions());
     await new Promise((resolve, reject) => {
       this.peer.on('open', resolve);
       this.peer.on('error', (error) => reject(error));
@@ -47,7 +73,7 @@ export class NetSession {
     const Peer = await loadPeer();
     this.role = 'guest';
     this.code = code.toUpperCase();
-    this.peer = new Peer({ debug: 0 });
+    this.peer = new Peer(peerOptions());
     await new Promise((resolve, reject) => { this.peer.on('open', resolve); this.peer.on('error', reject); });
     const conn = this.peer.connect(peerId(this.code), { reliable: false, serialization: 'json' });
     this.attach(conn);

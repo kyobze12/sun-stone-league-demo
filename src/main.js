@@ -8,7 +8,7 @@ import { Match } from './match.js';
 import { NetSession } from './net.js';
 import { mayaNumeralSVG, CALLOUTS, pick } from './maya.js';
 import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE } from './config.js';
-import { RINGS } from './ball.js';
+import { RINGS, GRAVITY, BALL_RADIUS } from './ball.js';
 import { Audio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
@@ -98,6 +98,7 @@ function showMenu() {
   for (const id of ['endscreen', 'pause-screen', 'countdown', 'online', 'howto']) show(id, false);
   show('menu', true);
   practiceMarker.visible = false;
+  $('rotate-hint').style.display = '';
   cameraRig.stopCinematic();
   records();
   closeNet();
@@ -145,6 +146,7 @@ function startMode(mode, options = {}) {
   ballMesh.userData.history.length = 0;
   for (const id of ['menu', 'endscreen', 'pause-screen', 'online', 'howto']) show(id, false);
   for (const id of ['hud', 'status-strip', 'pause-btn']) $(id).classList.remove('hidden');
+  $('rotate-hint').style.display = 'none';
   if (touch) $('touch-controls').classList.remove('hidden');
   $('kuk-score').style.display = mode === 'ringhunt' || mode === 'practice' ? 'none' : '';
   $('label-balam').textContent = mode === 'ringhunt' ? 'Score' : mode === 'practice' ? 'Rings' : G.role === 'guest' ? 'Balam (host)' : mode === 'local2p' ? 'Balam · P1' : 'Balam · You';
@@ -289,7 +291,7 @@ function present(events) {
         const f = G.fighters.get(e.player); if (f) f.lastStrike = G.elapsed;
         break;
       }
-      case 'whiff': if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
+      case 'whiff': if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4 && (!G.tutorial || G.tutorial.step >= 1)) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
       case 'tackle': audio.tackle(); if (e.player) particles.burst(G.world.byId(e.player).pos.clone().setY(.6), 0xffffff, 8, 3, 2); break;
       case 'steal': callout('STEAL!', e.team); audio.hit(); particles.burst(pos, 0xffffff, 20, 6, 4); cameraRig.impact(.3); break;
       case 'knockdown': audio.hit(); cameraRig.impact(.2); break;
@@ -391,7 +393,6 @@ $('host-btn').addEventListener('click', async () => {
     G.net = new NetSession();
     G.net.onClose = () => { if (G.mode === 'online') { callout('CONNECTION LOST', 'muted'); setTimeout(showMenu, 1500); } };
     const waiting = G.net.host();
-    await new Promise((r) => setTimeout(r, 300));
     status.innerHTML = `Share this code with your friend:<div class="code">${G.net.code}</div>Waiting for them to join…`;
     await waiting;
     status.innerHTML = 'Friend connected! Starting…';
@@ -443,19 +444,22 @@ function guestNetwork() {
   G.net.send({ t: 'in', i: input });
   G.net.ping();
   const snaps = G.guest.snapshots;
-  if (snaps.length >= 1) {
-    const latest = snaps[snaps.length - 1];
-    G.world.applySnapshot(latest.s);
-    const prev = snaps.length >= 2 ? snaps[snaps.length - 2] : null;
-    if (prev) {
-      // Interpolate ball and players between the two latest snapshots for smoothness.
-      const span = Math.max(1, latest.at - prev.at);
-      const t = THREE.MathUtils.clamp((performance.now() - latest.at) / span, 0, 1);
-      const b = G.world.ball;
-      b.pos.set(THREE.MathUtils.lerp(prev.s.ball[0], latest.s.ball[0], 1), THREE.MathUtils.lerp(prev.s.ball[1], latest.s.ball[1], 1), THREE.MathUtils.lerp(prev.s.ball[2], latest.s.ball[2], 1));
-      b.pos.addScaledVector(b.vel, t * span / 1000 * .5);
-    }
-    if (G.match.phase !== 'ended') { G.match.applySnapshot(latest.m); if (latest.m.phase === 'playing') show('countdown', false); else if (latest.m.phase === 'countdown') $('countdown-value').textContent = latest.m.countdown > .5 ? Math.ceil(latest.m.countdown) : 'PLAY'; }
+  if (!snaps.length) return;
+  const latest = snaps[snaps.length - 1];
+  if (latest.applied !== true) { G.world.applySnapshot(latest.s); latest.applied = true; latest.ball = G.world.ball.pos.clone(); }
+  // Snapshots arrive 20 times a second, so between them the guest advances the
+  // ball along its last known velocity. Without this the ball visibly steps.
+  const ahead = THREE.MathUtils.clamp((performance.now() - latest.at) / 1000, 0, .25);
+  if (ahead > 0 && latest.ball) {
+    const ball = G.world.ball;
+    ball.pos.copy(latest.ball).addScaledVector(ball.vel, ahead);
+    ball.pos.y += .5 * GRAVITY * ball.gravityScale * ahead * ahead;
+    ball.pos.y = Math.max(ball.pos.y, BALL_RADIUS);
+  }
+  if (G.match.phase !== 'ended') {
+    G.match.applySnapshot(latest.m);
+    if (latest.m.phase === 'playing') show('countdown', false);
+    else if (latest.m.phase === 'countdown') $('countdown-value').textContent = latest.m.countdown > .5 ? Math.ceil(latest.m.countdown) : 'PLAY';
   }
 }
 
@@ -545,6 +549,8 @@ function tick() {
   if (composer) composer.render(); else renderer.render(scene, camera);
 }
 tick();
+// Debug handle for automated tests and self-hosted sessions.
+if (import.meta.env?.DEV || /[?&](debug|peer)=/.test(location.search)) { window.__ssl = G; window.__scene = scene; window.__camera = camera; window.__THREE = THREE; }
 
 // Keep the start-of-match world so the attract camera has something to look at.
 G.world = new World({ mode: 'match', humans: [] });

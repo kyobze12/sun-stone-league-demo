@@ -1,5 +1,15 @@
 # Sun-Stone League — Gameplay Specification
 
+> **Status.** This is the design target for the full game. The build
+> currently implements a 2v2 version of it: charge-and-release striking
+> (smash and lob), shoulder charges with steals, ring / back-line /
+> double-bounce scoring, sudden death, role-based AI with three difficulties,
+> four power-ups, and five modes. Three-a-side play, pass-chain bonuses,
+> wall-run traversal and the full ability set remain on the roadmap — see
+> `ROADMAP.md`. Where this document and `src/config.js` disagree, the code is
+> the authority.
+
+
 ## Genre
 
 3v3 arena action-sports game combining the continuous momentum and positioning of vehicular arena sports with directional ball-striking and character combat.

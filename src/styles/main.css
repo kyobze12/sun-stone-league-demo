@@ -122,7 +122,7 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 #countdown-value { font-family: var(--display); font-size: clamp(90px, 22vw, 180px); font-weight: 800; color: var(--gold); text-shadow: 0 0 40px rgba(244,194,74,.7), 0 8px 0 #5a2d0c; animation: countPop .9s ease-out infinite; }
 @keyframes countPop { 0% { transform: scale(1.25); opacity: 0; } 20% { transform: scale(1); opacity: 1; } 100% { opacity: 1; } }
 
-#callout { position: absolute; top: 26%; left: 50%; transform: translate(-50%, -50%) scale(.8); z-index: 30; pointer-events: none; font-family: var(--display); font-size: clamp(26px, 6vw, 52px); font-weight: 800; letter-spacing: .08em; color: #fff3cf; text-shadow: 0 0 28px rgba(244,194,74,.65), 0 4px 0 #4a2208; opacity: 0; transition: opacity .25s, transform .25s; white-space: nowrap; text-align: center; }
+#callout { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%) scale(.8); z-index: 30; pointer-events: none; font-family: var(--display); font-size: clamp(26px, 6vw, 52px); font-weight: 800; letter-spacing: .08em; color: #fff3cf; text-shadow: 0 0 28px rgba(244,194,74,.65), 0 4px 0 #4a2208; opacity: 0; transition: opacity .25s, transform .25s; white-space: nowrap; text-align: center; }
 #callout.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 #callout.balam { color: #ffd18a; }
 #callout.kuk { color: #9df2dd; }

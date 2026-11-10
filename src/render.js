@@ -209,18 +209,24 @@ export class CameraRig {
       // clear the stone walls, framing the player and the ball together.
       const anchor = playerPos.clone().lerp(ballPos, .35);
       const limit = COURT_LENGTH / 2 - 1.2;
-      const distance = portrait ? 14 : 12.5;
+      // Portrait is tall and narrow, so it takes a steeper, closer camera: a
+      // landscape framing puts the player behind the on-screen thumb controls.
+      const distance = portrait ? 11 : 12.5;
       const rawZ = anchor.z - facing * distance;
       const z = THREE.MathUtils.clamp(rawZ, -limit, limit);
-      // When the shot would push the camera through the end wall, trade distance for height.
+      // When the shot would push the camera through the end wall, trade distance
+      // for height. The goal frame stands 7.8 high at |z|=14.4, so the camera
+      // also climbs over it as it nears an end line — otherwise it ends up
+      // inside the stone lintel with a jade block filling the lens.
       const squeeze = Math.abs(rawZ - z);
-      const height = (portrait ? 8.4 : 7.0) + squeeze * .3;
+      const nearEnd = THREE.MathUtils.smoothstep(Math.abs(z), 10, limit);
+      const height = (portrait ? 9 : 7.0) + squeeze * .3 + nearEnd * 4.2;
       this.desired.set(THREE.MathUtils.clamp(anchor.x * .5, -5, 5), height, z);
-      // Look slightly past the anchor toward the ring being attacked, so the
-      // target is always in frame — the framing a sports broadcast uses.
+      // Look past the anchor toward the ring being attacked, so the target is
+      // always in frame — the framing a sports broadcast uses.
       const look = anchor.clone();
-      look.z += facing * 4.5;
-      look.y = 2.7 + squeeze * .1;
+      look.z += facing * (portrait ? 3.5 : 4.5);
+      look.y = (portrait ? 2.2 : 2.7) + squeeze * .1;
       this.lookAt.lerp(look, 1 - Math.pow(.0006, dt));
     }
     if (this.shake > 0) { this.desired.x += (Math.random() - .5) * this.shake; this.desired.y += (Math.random() - .5) * this.shake; this.shake = Math.max(0, this.shake - dt * 2.2); }
