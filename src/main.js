@@ -54,9 +54,17 @@ let characterSource = null;
   try { await loadEnvironment(renderer, scene, manager); } catch { scene.background = new THREE.Color(0x24405e); }
   ({ arena, goals, crowd } = createCourt(scene));
   if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
-  try { await loadSkins(manager); } catch { /* fighters fall back to flat team colour */ }
-  try { await loadAnimations(manager); } catch { /* falls back to the procedural gait */ }
+  const missing = [];
+  try { await loadSkins(manager); } catch { missing.push('skins'); }
+  try { await loadAnimations(manager); } catch { missing.push('animations'); }
   characterSource = await loadCharacterModel(manager, './assets/characters/player.glb').catch(() => null);
+  if (!characterSource) missing.push('fighter model');
+  // Don't fail silently: the fallbacks still produce a playable game, but the
+  // blocky stand-in fighters look like a bug rather than a degraded asset load.
+  if (missing.length) {
+    G.assetWarning = `Running with stand-ins — could not load: ${missing.join(', ')}. Check your connection and reload.`;
+    console.warn('[sun-stone-league]', G.assetWarning);
+  }
   G.world = new World({ mode: 'match', humans: [] });
   rebuildFighters();
   $('loading').classList.add('depart');
@@ -110,6 +118,7 @@ function showMenu() {
   $('rotate-hint').style.display = '';
   cameraRig.stopCinematic();
   records();
+  if (G.assetWarning) $('records').textContent = G.assetWarning;
   closeNet();
   if (!G.world) { G.world = new World({ mode: 'match', humans: [] }); G.match = null; rebuildFighters(); }
 }

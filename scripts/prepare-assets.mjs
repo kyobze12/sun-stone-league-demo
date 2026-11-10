@@ -1,16 +1,17 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
-const destination=new URL('../public/assets/characters/player.glb',import.meta.url);
-const expected='45daed454a97e8207ad5f626c2204edd031fbdfa';
-const blobHash=bytes=>createHash('sha1').update(Buffer.from('blob '+bytes.length+'\0')).update(bytes).digest('hex');
-let existing;
-try {existing=await readFile(destination);} catch {}
-if(!existing || blobHash(existing)!==expected) {
-  const response=await fetch('https://raw.githubusercontent.com/badbuny126-png/-poca-tok-2026/dec2736cf50d2dd8608ecca3a6d431b1b1d68f9d/public/models/player.glb',{signal:AbortSignal.timeout(30000)});
-  if(!response.ok)throw new Error('Character download failed: '+response.status);
-  const bytes=Buffer.from(await response.arrayBuffer());
-  if(blobHash(bytes)!==expected)throw new Error('Character asset integrity check failed');
-  await mkdir(new URL('../public/assets/characters/',import.meta.url),{recursive:true});
-  await writeFile(destination,bytes);
+// The character model is committed to the repository, already simplified and
+// quantised for mobile by tools/optimize-character.mjs. This check exists so a
+// broken checkout fails with a clear message instead of silently dropping the
+// game to its procedural stand-in fighters.
+import { stat } from 'node:fs/promises';
+
+const model = new URL('../public/assets/characters/player.glb', import.meta.url);
+try {
+  const { size } = await stat(model);
+  if (size < 100_000) throw new Error(`suspiciously small (${size} bytes)`);
+  console.log(`Character asset present (${(size / 1024).toFixed(0)}KB).`);
+} catch (error) {
+  console.error('Character model missing or unreadable at public/assets/characters/player.glb');
+  console.error(String(error.message || error));
+  console.error('Restore it with: git checkout -- public/assets/characters/player.glb');
+  process.exit(1);
 }
-console.log('Character asset verified; served locally with the game.');
