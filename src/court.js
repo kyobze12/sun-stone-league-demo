@@ -70,7 +70,16 @@ function box(parent, size, position, material, cast = true) {
 
 // ---------------------------------------------------------------- environment
 export async function loadEnvironment(renderer, scene, manager) {
-  const texture = await new RGBELoader(manager).loadAsync('./assets/env/spruit_sunrise_1k.hdr');
+  // Prefer the real HDR for true high-range sun and reflections. Some static
+  // hosts refuse to serve .hdr at all, so fall back to a tone-mapped WebP of
+  // the same sky — the lighting is slightly flatter but everything still works.
+  let texture;
+  try {
+    texture = await new RGBELoader(manager).loadAsync('./assets/env/spruit_sunrise_1k.hdr');
+  } catch {
+    texture = await new THREE.TextureLoader(manager).loadAsync('./assets/env/sky_equirect.webp');
+    texture.colorSpace = THREE.SRGBColorSpace;
+  }
   texture.mapping = THREE.EquirectangularReflectionMapping;
   const pmrem = new THREE.PMREMGenerator(renderer);
   pmrem.compileEquirectangularShader();
