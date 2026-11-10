@@ -75,7 +75,11 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 .key { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #f1dcb3; color: var(--ink); font-weight: 900; font-size: 12px; margin-right: 4px; box-shadow: 0 2px 0 #9a7a4a; }
 .powerup-list { display: grid; gap: 8px; font-size: 14px; }
 .powerup-list i { display: inline-block; width: 12px; height: 12px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); margin-right: 8px; vertical-align: middle; }
-#howto-close { margin-top: 16px; width: 100%; }
+/* Keep the dismiss button reachable without scrolling the rules panel. */
+#howto-close { position: sticky; bottom: -24px; margin: 16px 0 0; width: 100%; box-shadow: 0 6px 0 #6f4210, 0 -10px 24px 10px rgba(22,11,6,.95); }
+#endscreen .panel button { margin-top: 0; }
+#endscreen .panel .end-buttons { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+#endscreen .panel .end-buttons button { flex: 1 1 140px; }
 
 .online-row { display: grid; gap: 12px; margin: 12px 0; }
 .join-box { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
