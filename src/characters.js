@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { TEAM_ROSTER } from './teams.js';
 
 export const TARGET_HEIGHT = 2.2;
 
@@ -22,7 +23,8 @@ function proceduralWarrior(team) {
   const body = new THREE.Group();
   root.add(body);
   const skin = material(0x9b5735);
-  const primary = material(team === 'player' ? 0x087a70 : 0xa3292f, team === 'player' ? 0x063d38 : 0x3b080a);
+  const onSunTeam = team === 'sun' || team === 'player';
+  const primary = material(onSunTeam ? 0x087a70 : 0xa3292f, onSunTeam ? 0x063d38 : 0x3b080a);
   const gold = material(0xe0a23e, 0x4a2400);
   const dark = material(0x241b1a);
 
@@ -43,7 +45,7 @@ function proceduralWarrior(team) {
   mesh(new THREE.BoxGeometry(.25, .14, .48), dark, [0, -.77, .08], leftLeg);
   mesh(new THREE.BoxGeometry(.25, .14, .48), dark, [0, -.77, .08], rightLeg);
 
-  const featherColors = team === 'player' ? [0x0ab7ae, 0x134e8c, 0xe2a437] : [0xd52e36, 0x75232d, 0xe2a437];
+  const featherColors = onSunTeam ? [0x0ab7ae, 0x134e8c, 0xe2a437] : [0xd52e36, 0x75232d, 0xe2a437];
   for (let i = 0; i < 7; i += 1) {
     const feather = mesh(new THREE.ConeGeometry(.12, .84, 6), material(featherColors[i % 3]), [(i - 3) * .12, 2.72 + Math.abs(i - 3) * .05, .04], body);
     feather.rotation.z = -(i - 3) * .1;
@@ -91,6 +93,7 @@ function makeContainer(model, team) {
   normalizeModel(model);
   model.traverse((object) => { if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; } });
   if (team === 'rival') tint(model, 0xb51f2f);
+  else if (team === 'sun') tint(model, 0x087a70);
   container.add(model);
   const bones = collectBones(model);
   container.userData.rig = { root: container, body: model, bones, procedural: false, baseY: 0 };
@@ -130,34 +133,46 @@ function rotateBone(rig,name,x=0,y=0,z=0) {
   });
 }
 
-export function spawnPair(scene, sourceModel = null) {
-  let playerChar;
-  let aiChar;
+function createCharacter(sourceModel, fighter) {
   if (sourceModel) {
     try {
-      playerChar = makeContainer(cloneSkeleton(sourceModel), 'player');
-      if (Object.keys(playerChar.userData.rig.bones).length < 5) throw new Error('Static T-pose model');
-      aiChar = makeContainer(cloneSkeleton(sourceModel), 'rival');
-      prepareImportedRig(playerChar.userData.rig);
-      prepareImportedRig(aiChar.userData.rig);
+      const character = makeContainer(cloneSkeleton(sourceModel), fighter.team);
+      if (Object.keys(character.userData.rig.bones).length < 5) throw new Error('Static T-pose model');
+      prepareImportedRig(character.userData.rig);
+      return character;
     } catch {
-      playerChar = proceduralWarrior('player');
-      aiChar = proceduralWarrior('rival');
+      // A malformed or static source model should not prevent the match from starting.
     }
-  } else {
-    playerChar = proceduralWarrior('player');
-    aiChar = proceduralWarrior('rival');
   }
-  playerChar.position.set(-2.2, 0, -7);
-  aiChar.position.set(2.2, 0, 7);
-  scene.add(playerChar, aiChar);
-  return { playerChar, aiChar, playerBones: playerChar.userData.rig, aiBones: aiChar.userData.rig };
+  return proceduralWarrior(fighter.team);
+}
+
+export function spawnRoster(scene, sourceModel = null) {
+  const fighters = TEAM_ROSTER.map((spec) => {
+    const character = createCharacter(sourceModel, spec);
+    character.position.set(...spec.position);
+    character.userData.fighterId = spec.id;
+    character.userData.team = spec.team;
+    scene.add(character);
+    return { ...spec, character, rig: character.userData.rig };
+  });
+  return { fighters, player: fighters[0], ai: fighters.slice(1) };
+}
+
+// Keep the original pair shape for focused character-pipeline checks and older callers.
+export function spawnPair(scene, sourceModel = null) {
+  const player = createCharacter(sourceModel, TEAM_ROSTER[0]);
+  const ai = createCharacter(sourceModel, TEAM_ROSTER[2]);
+  player.position.set(...TEAM_ROSTER[0].position);
+  ai.position.set(...TEAM_ROSTER[2].position);
+  scene.add(player, ai);
+  return { playerChar: player, aiChar: ai, playerBones: player.userData.rig, aiBones: ai.userData.rig };
 }
 
 export function loadCharacters(scene, manager, modelUrl) {
   return new Promise((resolve) => {
-    if (!modelUrl) { resolve(spawnPair(scene)); return; }
-    new GLTFLoader(manager).load(modelUrl, (gltf) => resolve(spawnPair(scene, gltf.scene)), undefined, () => resolve(spawnPair(scene)));
+    if (!modelUrl) { resolve(spawnRoster(scene)); return; }
+    new GLTFLoader(manager).load(modelUrl, (gltf) => resolve(spawnRoster(scene, gltf.scene)), undefined, () => resolve(spawnRoster(scene)));
   });
 }
 

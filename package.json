@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "node scripts/check.mjs",
+    "pretest": "node scripts/prepare-assets.mjs",
     "predev": "node scripts/prepare-assets.mjs",
     "prebuild": "node scripts/prepare-assets.mjs",
     "test": "node --test test/game.test.js"

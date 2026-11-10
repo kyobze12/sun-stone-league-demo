@@ -6,7 +6,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { BallState, BALL_RADIUS } from '../src/ball.js';
 import { shotVelocity } from '../src/shot.js';
-import { spawnPair, animateCharacter, TARGET_HEIGHT } from '../src/characters.js';
+import { spawnPair, spawnRoster, animateCharacter, TARGET_HEIGHT } from '../src/characters.js';
+import { TEAM_ROSTER, getAITarget, scoringTeam, shouldAIAttemptHit } from '../src/teams.js';
 import { alignArena, ARENA_LAYOUT } from '../src/arena-layout.js';
 import { RING_HEIGHT, COURT_WIDTH } from '../src/court.js';
 const ring=new THREE.Vector3(COURT_WIDTH/2-1.25,RING_HEIGHT,0);
@@ -26,6 +27,34 @@ test('rim overlap is rejected and reset clears all scoring state',()=>{
   assert.equal(scored,false);
   b.scored=true;b.heldCooldown=.3;b.pendingPass=1;b.reset();
   assert.equal(b.scored,false);assert.equal(b.heldCooldown,0);assert.equal(b.pendingPass,0);
+});
+test('2v2 roster has one human and three independent AI fighters split evenly by team',async()=>{
+  const {fighters}=spawnRoster(new THREE.Scene(),await characterSource());
+  assert.equal(fighters.length,4);
+  assert.deepEqual(fighters.filter((fighter)=>fighter.team==='sun').map((fighter)=>fighter.id),['player','sun-support']);
+  assert.deepEqual(fighters.filter((fighter)=>fighter.team==='rival').map((fighter)=>fighter.id),['rival-striker','rival-support']);
+  assert.equal(fighters.filter((fighter)=>fighter.control==='human').length,1);
+  assert.equal(fighters.filter((fighter)=>fighter.control==='ai').length,3);
+  const firstBone=fighters[0].rig.rest.LeftArm.bone;
+  for(const fighter of fighters.slice(1))assert.notEqual(fighter.rig.rest.LeftArm.bone,firstBone);
+  assert.equal(TEAM_ROSTER.length,4);
+});
+test('AI support target stays reachable and scores follow the last striking team',()=>{
+  const ball=new THREE.Vector3(0,0,0);
+  const player=new THREE.Vector3(0,0,-6);
+  const sunTarget=getAITarget(TEAM_ROSTER[1],ball,player);
+  const rivalTarget=getAITarget(TEAM_ROSTER[3],ball,player);
+  const rivalStrikerTarget=getAITarget(TEAM_ROSTER[2],ball,player);
+  assert.ok(sunTarget.distanceTo(ball)<2.05);
+  assert.ok(rivalTarget.distanceTo(ball)<2.05);
+  assert.equal(rivalStrikerTarget.distanceTo(ball),0,'striker pursues the ball directly');
+  for(const opponent of TEAM_ROSTER.filter((fighter)=>fighter.team==='rival'&&fighter.control==='ai')) {
+    assert.equal(shouldAIAttemptHit(.9,0,0,2.05),true,opponent.id+' can strike when in range');
+    assert.equal(shouldAIAttemptHit(.9,.2,0,2.05),false,opponent.id+' respects its hit cooldown');
+  }
+  assert.equal(scoringTeam('versus','sun'),'sun');
+  assert.equal(scoringTeam('versus','rival'),'rival');
+  assert.equal(scoringTeam('solo','rival'),'sun');
 });
 test('supplied arena inner court aligns with game coordinates',async()=>{
   const model=new OBJLoader().parse(await readFile('public/assets/arena/arena.obj','utf8'));
