@@ -74,20 +74,59 @@ export function normalizeModel(model) {
   model.updateMatrixWorld(true);
 }
 
-function tint(root, color) {
+// Each team's baked jaguar-warrior skin. The source mesh ships a 2x2 placeholder
+// texture over a 0.4 grey base factor, so without this every fighter renders as
+// a flat silhouette.
+const SKINS = {};
+
+// Idle/Walk/Run clips, retargeted onto our fighters by bone name.
+let CLIPS = null;
+
+export async function loadAnimations(manager, url = './assets/characters/locomotion.glb') {
+  const gltf = await new GLTFLoader(manager).loadAsync(url);
+  CLIPS = {};
+  for (const clip of gltf.animations) {
+    // Drop every Hips track. The clips carry absolute local transforms from a
+    // rig whose hips rest in a different orientation, so applying them stood
+    // our fighters on their heads; and root translation would fight the
+    // simulation for position anyway. Children animate relative to the hips,
+    // so the gait survives intact.
+    clip.tracks = clip.tracks.filter((track) => !/Hips\./i.test(track.name));
+    CLIPS[clip.name.toLowerCase()] = clip;
+  }
+  return CLIPS;
+}
+
+export async function loadSkins(manager) {
+  const loader = new THREE.TextureLoader(manager);
+  const [balam, kuk] = await Promise.all([
+    loader.loadAsync('./assets/characters/skin_balam.webp'),
+    loader.loadAsync('./assets/characters/skin_kuk.webp'),
+  ]);
+  for (const [team, texture] of [['balam', balam], ['kuk', kuk]]) {
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.flipY = false;            // glTF UV convention
+    texture.anisotropy = 4;
+    SKINS[team] = texture;
+  }
+  return SKINS;
+}
+
+function dressAs(root, team) {
+  const skin = SKINS[team];
   root.traverse((object) => {
     if (!object.isMesh) return;
     const source = Array.isArray(object.material) ? object.material : [object.material];
     const materials = source.map((oldMaterial) => {
       const next = oldMaterial.clone();
-      // The source model ships a 0.4 grey baseColorFactor over a dark texture,
-      // which renders as a near-black silhouette. Replace the factor outright
-      // with the full team colour and add a little emissive so each fighter
-      // stays readable against the sandstone even in shadow.
-      if (next.color) next.color.set(color);
-      next.emissive = new THREE.Color(color).multiplyScalar(.28);
+      if (next.color) next.color.set(0xffffff);   // drop the 0.4 grey base factor
+      if (skin) { next.map = skin; }
+      else if (next.color) next.color.set(TEAMS[team]?.color ?? 0x999999);
+      next.emissive = new THREE.Color(TEAMS[team]?.color ?? 0x888888).multiplyScalar(.05);
       next.emissiveIntensity = 1;
-      next.roughness = Math.min(next.roughness ?? .9, .75);
+      next.roughness = Math.min(next.roughness ?? .9, .72);
+      next.metalness = .04;
+      next.needsUpdate = true;
       return next;
     });
     object.material = Array.isArray(object.material) ? materials : materials[0];
@@ -98,10 +137,21 @@ function makeContainer(model, team) {
   const container = new THREE.Group();
   normalizeModel(model);
   model.traverse((object) => { if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; } });
-  tint(model, TEAMS[team]?.color ?? 0x888888);
+  dressAs(model, team);
   container.add(model);
   const bones = collectBones(model);
   container.userData.rig = { root: container, body: model, bones, procedural: false, baseY: 0 };
+  if (CLIPS) {
+    const mixer = new THREE.AnimationMixer(model);
+    const actions = {};
+    for (const [name, clip] of Object.entries(CLIPS)) {
+      const action = mixer.clipAction(clip);
+      action.play(); action.setEffectiveWeight(name === 'idle' ? 1 : 0);
+      actions[name] = action;
+    }
+    container.userData.rig.mixer = mixer;
+    container.userData.rig.actions = actions;
+  }
   return container;
 }
 
@@ -184,6 +234,28 @@ export function animateCharacter(rig,speed,swingTimer,dt,time,state={}) {
     rig.leftArm.rotation.x=-stride*.3;rig.rightArm.rotation.x=stride*.3;
     const hit=swingTimer>0?Math.sin((1-swingTimer/.45)*Math.PI):0;
     rig.body.rotation.set(0,hit*.75,-hit*.16);
+    return;
+  }
+  if(rig.mixer) {
+    // Crossfade idle -> walk -> run by measured speed, then layer the strike
+    // and stagger poses on top of whatever the clip produced.
+    rig.moveBlend=THREE.MathUtils.damp(rig.moveBlend,moving,12,dt);
+    const m=rig.moveBlend;
+    const walk=THREE.MathUtils.clamp(m/.45,0,1), run=THREE.MathUtils.clamp((m-.45)/.55,0,1);
+    rig.actions.idle.setEffectiveWeight(1-walk);
+    rig.actions.walk.setEffectiveWeight(walk*(1-run));
+    rig.actions.run.setEffectiveWeight(walk*run);
+    rig.actions.run.timeScale=.85+m*.45;
+    rig.actions.walk.timeScale=.9+m*.4;
+    rig.mixer.update(dt*(stun>0?.15:1));
+    const hit=swingTimer>0?Math.sin((1-swingTimer/.45)*Math.PI):0;
+    if(hit>.001||stun>0) {
+      rotateBone(rig,'Spine1',0,-hit*.55,-hit*.2);
+      rotateBone(rig,'RightArm',0,0,hit*.9);
+      rotateBone(rig,'LeftArm',0,0,-hit*.4);
+      rotateBone(rig,'Hips',0,hit*.5,0);
+    }
+    rig.root.updateMatrixWorld(true);
     return;
   }
   rig.moveBlend=THREE.MathUtils.damp(rig.moveBlend,moving,12,dt);

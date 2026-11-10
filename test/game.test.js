@@ -3,13 +3,11 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { BallState, RINGS, ringFor, BALL_RADIUS } from '../src/ball.js';
 import { strikeVelocity, ringSolution } from '../src/shot.js';
 import { spawnRoster, animateCharacter, TARGET_HEIGHT } from '../src/characters.js';
 import { World, mulberry32 } from '../src/world.js';
 import { Match } from '../src/match.js';
-import { alignArena, ARENA_LAYOUT } from '../src/arena-layout.js';
 import { mayaNumeralSVG } from '../src/maya.js';
 import { DIFFICULTY, COURT_LENGTH, COURT_WIDTH, BACKLINE_MAX_HEIGHT, TEAMS, OTHER_TEAM } from '../src/config.js';
 
@@ -268,15 +266,6 @@ test('players and rings stay inside the court', () => {
   }
   assert.ok(Number.isFinite(world.ball.pos.x), 'ball stays numeric');
   for (const ring of RINGS) assert.ok(Math.abs(ring.center.z) < COURT_LENGTH / 2, 'ring sits inside the end line');
-});
-
-test('supplied arena inner court aligns with game coordinates', async () => {
-  const model = new OBJLoader().parse(await readFile('public/assets/arena/arena.obj', 'utf8'));
-  alignArena(model);
-  const { centerX, centerZ, floorY, scale } = ARENA_LAYOUT;
-  assert.ok(new THREE.Vector3(centerX, floorY, centerZ).applyMatrix4(model.matrixWorld).length() < 1e-6);
-  const side = new THREE.Vector3(centerX, floorY, centerZ + 7 / scale).applyMatrix4(model.matrixWorld);
-  assert.ok(Math.abs(side.x - 7) < 1e-6);
 });
 
 async function characterSource() {

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import { createCourt, loadArenaModel, updateCourt, addLighting } from './court.js';
-import { loadCharacterModel, spawnRoster, animateCharacter } from './characters.js';
+import { createCourt, loadStoneTextures, loadEnvironment, updateCourt, addLighting } from './court.js';
+import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter } from './characters.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
 import { setupInput, readInput, resetInput, isTouch } from './input.js';
 import { World, EMPTY_INPUT } from './world.js';
@@ -21,7 +21,8 @@ $('quality').value = quality;
 const canvas = $('game-canvas');
 const renderer = createRenderer(canvas, quality);
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0xb8947a, .0032);
+// Very light haze only — the HDRI supplies the sky and the distance cue.
+scene.fog = new THREE.FogExp2(0xc8a582, .0016);
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 420);
 camera.position.set(0, 7, -16);
 let composer = createComposer(renderer, scene, camera, quality);
@@ -35,8 +36,6 @@ addEventListener('resize', () => {
 });
 
 const lights = addLighting(scene);
-const { arena, fallbackDecor, goals, crowd } = createCourt(scene);
-if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
 const ballMesh = createBall(scene);
 const particles = new Particles(scene, QUALITY[quality].particles);
 const powerupVisuals = new PowerupVisuals(scene);
@@ -45,15 +44,25 @@ const audio = new Audio();
 
 const manager = new THREE.LoadingManager();
 manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Math.round(loaded / total * 100)}%`; };
-manager.onError = () => { $('loading-note').textContent = 'Using sculpted fallback'; };
-const arenaReady = loadArenaModel(arena, fallbackDecor, manager).catch(() => { fallbackDecor.visible = true; });
+
+// The stone maps and the sky have to be in hand before the arena is built,
+// so the materials carry their textures from the first frame.
+let arena = null, goals = [], crowd = [];
 let characterSource = null;
-const charactersReady = loadCharacterModel(manager, './assets/characters/player.glb').then((model) => { characterSource = model; });
-Promise.all([arenaReady, charactersReady]).then(() => {
+(async () => {
+  try { await loadStoneTextures(manager); } catch { $('loading-note').textContent = 'Stone textures unavailable — using flat stone'; }
+  try { await loadEnvironment(renderer, scene, manager); } catch { scene.background = new THREE.Color(0x24405e); }
+  ({ arena, goals, crowd } = createCourt(scene));
+  if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
+  try { await loadSkins(manager); } catch { /* fighters fall back to flat team colour */ }
+  try { await loadAnimations(manager); } catch { /* falls back to the procedural gait */ }
+  characterSource = await loadCharacterModel(manager, './assets/characters/player.glb').catch(() => null);
+  G.world = new World({ mode: 'match', humans: [] });
+  rebuildFighters();
   $('loading').classList.add('depart');
   setTimeout(() => { $('loading').style.display = 'none'; }, 450);
   showMenu();
-});
+})();
 
 // Aim indicator under the controlled player
 const aimGroup = new THREE.Group();
@@ -544,14 +553,10 @@ function tick() {
     const camPlayer = me || world.players[0];
     cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? TEAMS[me.team].attacks : 1, portrait: innerHeight > innerWidth, intro: !G.mode });
   }
-  updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement);
+  if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement);
   particles.update(frameDt);
   if (composer) composer.render(); else renderer.render(scene, camera);
 }
 tick();
 // Debug handle for automated tests and self-hosted sessions.
-if (import.meta.env?.DEV || /[?&](debug|peer)=/.test(location.search)) { window.__ssl = G; window.__scene = scene; window.__camera = camera; window.__THREE = THREE; }
-
-// Keep the start-of-match world so the attract camera has something to look at.
-G.world = new World({ mode: 'match', humans: [] });
-rebuildFighters();
+if (import.meta.env?.DEV || /[?&](debug|peer)=/.test(location.search)) { window.__ssl = G; window.__scene = scene; window.__camera = camera; window.__THREE = THREE; window.__rig = cameraRig; }

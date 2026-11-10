@@ -32,7 +32,7 @@ export function createRenderer(canvas, quality) {
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.08;
+  renderer.toneMappingExposure = .96;
   return renderer;
 }
 
@@ -61,14 +61,18 @@ function glowTexture() {
 
 export function createBall(scene) {
   const group = new THREE.Group();
-  const coreMaterial = new THREE.MeshStandardMaterial({ color: 0x31221b, roughness: .55, metalness: .15, emissive: 0xff6500, emissiveIntensity: .08 });
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_RADIUS, 3), coreMaterial);
+  const coreMaterial = new THREE.MeshStandardMaterial({ color: 0x2a1c16, roughness: .72, metalness: .05, emissive: 0xff6500, emissiveIntensity: .08 });
+  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_RADIUS, 2), coreMaterial);
   core.castShadow = true; group.add(core);
-  const bands = new THREE.Mesh(new THREE.TorusGeometry(BALL_RADIUS * .82, .035, 7, 30), new THREE.MeshBasicMaterial({ color: 0xf6a52a }));
-  bands.rotation.x = Math.PI / 2; group.add(bands);
-  const bands2 = bands.clone(); bands2.rotation.set(0, 0, Math.PI / 2); group.add(bands2);
+  // Bands must sit on the surface: at 0.82r they were buried inside the core
+  // and the ball rendered as a featureless blob.
+  const bandMat = new THREE.MeshStandardMaterial({ color: 0xf0a62c, roughness: .45, metalness: .3, emissive: 0x3a1c00, emissiveIntensity: .3 });
+  const bands = new THREE.Mesh(new THREE.TorusGeometry(BALL_RADIUS * .99, .055, 8, 36), bandMat);
+  bands.rotation.x = Math.PI / 2; bands.castShadow = true; group.add(bands);
+  const bands2 = new THREE.Mesh(new THREE.TorusGeometry(BALL_RADIUS * .99, .055, 8, 36), bandMat);
+  bands2.rotation.set(0, 0, Math.PI / 2); bands2.castShadow = true; group.add(bands2);
   const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xff9b20, transparent: true, opacity: .18, blending: THREE.AdditiveBlending, depthWrite: false }));
-  glow.scale.set(2.2, 2.2, 1); group.add(glow);
+  glow.scale.set(1.25, 1.25, 1); group.add(glow);
   const light = new THREE.PointLight(0xff7b19, 0, 8, 2); group.add(light);
   // Shadow blob so the ball's height reads on every device
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(BALL_RADIUS * 1.1, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: .35, depthWrite: false }));
@@ -94,10 +98,10 @@ export function updateBallVisual(ball, pos, velocity, dt, tint = 0xff9b20) {
   data.core.material.emissiveIntensity = .08 + energy * 1.5;
   data.core.material.emissive.setHex(tint);
   data.glow.material.color.setHex(tint);
-  data.glow.material.opacity = .12 + energy * .65;
-  data.glow.scale.setScalar(1.5 + energy * 2.2);
+  data.glow.material.opacity = .10 + energy * .3;
+  data.glow.scale.setScalar(1.15 + energy * .75);
   data.light.color.setHex(tint);
-  data.light.intensity = energy * 24;
+  data.light.intensity = energy * 16;
   data.shadow.position.set(pos.x, .03, pos.z);
   data.shadow.scale.setScalar(THREE.MathUtils.clamp(1.3 - pos.y * .08, .5, 1.3));
   data.shadow.material.opacity = THREE.MathUtils.clamp(.4 - pos.y * .03, .08, .4);
@@ -208,10 +212,10 @@ export class CameraRig {
       // Broadcast follow camera: sits behind the player's own end, high enough to
       // clear the stone walls, framing the player and the ball together.
       const anchor = playerPos.clone().lerp(ballPos, .35);
-      const limit = COURT_LENGTH / 2 - 1.2;
+      const limit = COURT_LENGTH / 2 - 3.6;   // never reach the goal structure
       // Portrait is tall and narrow, so it takes a steeper, closer camera: a
       // landscape framing puts the player behind the on-screen thumb controls.
-      const distance = portrait ? 11 : 12.5;
+      const distance = portrait ? 10 : 11;
       const rawZ = anchor.z - facing * distance;
       const z = THREE.MathUtils.clamp(rawZ, -limit, limit);
       // When the shot would push the camera through the end wall, trade distance
@@ -219,8 +223,7 @@ export class CameraRig {
       // also climbs over it as it nears an end line — otherwise it ends up
       // inside the stone lintel with a jade block filling the lens.
       const squeeze = Math.abs(rawZ - z);
-      const nearEnd = THREE.MathUtils.smoothstep(Math.abs(z), 10, limit);
-      const height = (portrait ? 9 : 7.0) + squeeze * .3 + nearEnd * 4.2;
+      const height = (portrait ? 8.6 : 6.8) + squeeze * .34;
       this.desired.set(THREE.MathUtils.clamp(anchor.x * .5, -5, 5), height, z);
       // Look past the anchor toward the ring being attacked, so the target is
       // always in frame — the framing a sports broadcast uses.

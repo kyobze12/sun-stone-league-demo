@@ -2,3 +2,7 @@ node_modules/
 dist/
 .DS_Store
 *.log
+
+tools/skin_*.png
+tools/uv_regions.png
+tools/Soldier.glb
