@@ -73,10 +73,21 @@ export async function loadEnvironment(renderer, scene, manager) {
   // Prefer the real HDR for true high-range sun and reflections. Some static
   // hosts refuse to serve .hdr at all, so fall back to a tone-mapped WebP of
   // the same sky — the lighting is slightly flatter but everything still works.
-  let texture;
+  //
+  // The file is probed first rather than simply letting the load fail: handing
+  // a 404 body to the HDR parser throws from inside the loader's own callback,
+  // which escapes as an uncaught error that no try/catch here can see.
+  const HDR = './assets/env/spruit_sunrise_1k.hdr';
+  let hdrAvailable = false;
   try {
-    texture = await new RGBELoader(manager).loadAsync('./assets/env/spruit_sunrise_1k.hdr');
-  } catch {
+    const response = await fetch(HDR, { method: 'HEAD' });
+    hdrAvailable = response.ok && !/text\/html/i.test(response.headers.get('content-type') || '');
+  } catch { hdrAvailable = false; }
+
+  let texture;
+  if (hdrAvailable) {
+    texture = await new RGBELoader(manager).loadAsync(HDR);
+  } else {
     texture = await new THREE.TextureLoader(manager).loadAsync('./assets/env/sky_equirect.webp');
     texture.colorSpace = THREE.SRGBColorSpace;
   }
