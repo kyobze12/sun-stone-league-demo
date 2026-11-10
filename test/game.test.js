@@ -4,97 +4,311 @@ import { readFile } from 'node:fs/promises';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { BallState, BALL_RADIUS } from '../src/ball.js';
-import { shotVelocity } from '../src/shot.js';
-import { spawnPair, spawnRoster, animateCharacter, TARGET_HEIGHT } from '../src/characters.js';
-import { TEAM_ROSTER, getAITarget, scoringTeam, shouldAIAttemptHit } from '../src/teams.js';
+import { BallState, RINGS, ringFor, BALL_RADIUS } from '../src/ball.js';
+import { strikeVelocity, ringSolution } from '../src/shot.js';
+import { spawnRoster, animateCharacter, TARGET_HEIGHT } from '../src/characters.js';
+import { World, mulberry32 } from '../src/world.js';
+import { Match } from '../src/match.js';
 import { alignArena, ARENA_LAYOUT } from '../src/arena-layout.js';
-import { RING_HEIGHT, COURT_WIDTH } from '../src/court.js';
-const ring=new THREE.Vector3(COURT_WIDTH/2-1.25,RING_HEIGHT,0);
+import { mayaNumeralSVG } from '../src/maya.js';
+import { DIFFICULTY, COURT_LENGTH, COURT_WIDTH, BACKLINE_MAX_HEIGHT, TEAMS, OTHER_TEAM } from '../src/config.js';
 
-test('resting-ball ring shots score exactly once across frame rates',()=>{
-  for(const fps of [20,30,60,120]) for(const x of [-4,0,3]){
-    const b=new BallState();b.pos.set(x,BALL_RADIUS,0);
-    b.vel.copy(shotVelocity(b.pos,Math.PI/2,ring));
-    let count=0;
-    for(let i=0;i<fps*3;i++)count+=Number(b.update(1/fps,ring));
-    assert.equal(count,1,'fps='+fps+', x='+x);
+const northRing = RINGS[0].center;
+
+// ---------------------------------------------------------------- ball & rules
+test('a ring shot scores exactly once at every frame rate', () => {
+  for (const fps of [20, 30, 60, 120]) for (const x of [-3, 0, 2.5]) {
+    const ball = new BallState();
+    ball.pos.set(x, BALL_RADIUS, 0);
+    ball.struck = true;
+    ball.vel.copy(ringSolution(ball.pos, northRing));
+    let rings = 0;
+    for (let i = 0; i < fps * 4; i += 1) rings += ball.update(1 / fps).filter((e) => e.type === 'ring').length;
+    assert.equal(rings, 1, `fps=${fps}, x=${x}`);
   }
 });
-test('rim overlap is rejected and reset clears all scoring state',()=>{
-  const b=new BallState();b.pos.set(ring.x-.8,ring.y,.7);b.vel.set(10,0,0);
-  let scored=false;for(let i=0;i<30;i++)scored=b.update(1/120,ring)||scored;
-  assert.equal(scored,false);
-  b.scored=true;b.heldCooldown=.3;b.pendingPass=1;b.reset();
-  assert.equal(b.scored,false);assert.equal(b.heldCooldown,0);assert.equal(b.pendingPass,0);
+
+test('a ball that clips the rim bounces off instead of scoring', () => {
+  const ball = new BallState();
+  // Level with the top of the stone rather than the opening: it must bounce off.
+  ball.pos.set(northRing.x, northRing.y + 1.05, northRing.z - 2);
+  ball.struck = true;
+  ball.vel.set(0, 0, 9);
+  const seen = [];
+  for (let i = 0; i < 240; i += 1) seen.push(...ball.update(1 / 120));
+  assert.equal(seen.some((e) => e.type === 'ring'), false, 'no score through solid stone');
+  assert.equal(seen.some((e) => e.type === 'rim'), true, 'the rim was struck');
 });
-test('2v2 roster has one human and three independent AI fighters split evenly by team',async()=>{
-  const {fighters}=spawnRoster(new THREE.Scene(),await characterSource());
-  assert.equal(fighters.length,4);
-  assert.deepEqual(fighters.filter((fighter)=>fighter.team==='sun').map((fighter)=>fighter.id),['player','sun-support']);
-  assert.deepEqual(fighters.filter((fighter)=>fighter.team==='rival').map((fighter)=>fighter.id),['rival-striker','rival-support']);
-  assert.equal(fighters.filter((fighter)=>fighter.control==='human').length,1);
-  assert.equal(fighters.filter((fighter)=>fighter.control==='ai').length,3);
-  const firstBone=fighters[0].rig.rest.LeftArm.bone;
-  for(const fighter of fighters.slice(1))assert.notEqual(fighter.rig.rest.LeftArm.bone,firstBone);
-  assert.equal(TEAM_ROSTER.length,4);
+
+test('reset clears every scoring latch', () => {
+  const ball = new BallState();
+  ball.scored = true; ball.heldCooldown = .3; ball.pendingPass.north = 1; ball.bounces = 2; ball.struck = true;
+  ball.reset();
+  assert.equal(ball.scored, false);
+  assert.equal(ball.heldCooldown, 0);
+  assert.equal(ball.pendingPass.north, 0);
+  assert.equal(ball.bounces, 0);
+  assert.equal(ball.struck, false);
 });
-test('AI support target stays reachable and scores follow the last striking team',()=>{
-  const ball=new THREE.Vector3(0,0,0);
-  const player=new THREE.Vector3(0,0,-6);
-  const sunTarget=getAITarget(TEAM_ROSTER[1],ball,player);
-  const rivalTarget=getAITarget(TEAM_ROSTER[3],ball,player);
-  const rivalStrikerTarget=getAITarget(TEAM_ROSTER[2],ball,player);
-  assert.ok(sunTarget.distanceTo(ball)<2.05);
-  assert.ok(rivalTarget.distanceTo(ball)<2.05);
-  assert.equal(rivalStrikerTarget.distanceTo(ball),0,'striker pursues the ball directly');
-  for(const opponent of TEAM_ROSTER.filter((fighter)=>fighter.team==='rival'&&fighter.control==='ai')) {
-    assert.equal(shouldAIAttemptHit(.9,0,0,2.05),true,opponent.id+' can strike when in range');
-    assert.equal(shouldAIAttemptHit(.9,.2,0,2.05),false,opponent.id+' respects its hit cooldown');
+
+test('only low balls score on the back line; high ones rebound into play', () => {
+  for (const [height, shouldScore] of [[BACKLINE_MAX_HEIGHT - .5, true], [BACKLINE_MAX_HEIGHT + 1.5, false]]) {
+    const ball = new BallState();
+    ball.pos.set(0, height, COURT_LENGTH / 2 - 2);
+    ball.vel.set(0, 0, 12);
+    ball.struck = true;
+    const events = [];
+    for (let i = 0; i < 60; i += 1) events.push(...ball.update(1 / 120));
+    assert.equal(events.some((e) => e.type === 'backline'), shouldScore, `height ${height}`);
   }
-  assert.equal(scoringTeam('versus','sun'),'sun');
-  assert.equal(scoringTeam('versus','rival'),'rival');
-  assert.equal(scoringTeam('solo','rival'),'sun');
 });
-test('supplied arena inner court aligns with game coordinates',async()=>{
-  const model=new OBJLoader().parse(await readFile('public/assets/arena/arena.obj','utf8'));
+
+test('a shield repels the back line instead of conceding', () => {
+  const ball = new BallState();
+  ball.pos.set(0, 1, COURT_LENGTH / 2 - 2);
+  ball.vel.set(0, 0, 12);
+  ball.struck = true;
+  ball.shields[ringFor(1).defender] = 5;
+  const events = [];
+  for (let i = 0; i < 60; i += 1) events.push(...ball.update(1 / 120));
+  assert.equal(events.some((e) => e.type === 'backline'), false);
+  assert.equal(events.some((e) => e.type === 'shield'), true);
+  assert.ok(ball.vel.z < 0, 'ball is pushed back down court');
+});
+
+test('a second bounce on the same half is a fault, alternating halves is not', () => {
+  const ball = new BallState();
+  ball.struck = true;
+  const bounceAt = (z) => {
+    ball.pos.set(0, BALL_RADIUS + .05, z);
+    ball.vel.set(0, -6, 0);
+    const events = [];
+    for (let i = 0; i < 20; i += 1) events.push(...ball.update(1 / 120));
+    return events;
+  };
+  assert.equal(bounceAt(5).some((e) => e.type === 'doubleBounce'), false, 'first bounce is fine');
+  assert.equal(bounceAt(-5).some((e) => e.type === 'doubleBounce'), false, 'other half resets the count');
+  assert.equal(bounceAt(-6).some((e) => e.type === 'doubleBounce'), true, 'twice on one half is a fault');
+});
+
+// ---------------------------------------------------------------- scoring
+test('every scoring route credits the attacking team', () => {
+  const world = new World({ mode: 'match', humans: [] });
+  const match = new Match('match', world);
+  match.phase = 'playing';
+  for (const [side, kind] of [[1, 'ring'], [-1, 'ring'], [1, 'backline'], [-1, 'backline']]) {
+    match.phase = 'playing';
+    const before = { ...match.score };
+    const event = kind === 'ring' ? { type: 'ring', side, ring: ringFor(side) } : { type: 'backline', side };
+    match.update(1 / 60, [event]);
+    const expected = OTHER_TEAM[ringFor(side).defender];
+    assert.ok(match.score[expected] > before[expected], `${kind} on side ${side} credits ${expected}`);
+  }
+});
+
+test('a double bounce gives the point away to the other team', () => {
+  const world = new World({ mode: 'match', humans: [] });
+  const match = new Match('match', world);
+  match.phase = 'playing';
+  match.update(1 / 60, [{ type: 'doubleBounce', side: 1 }]);   // bounced twice in K'uk's half
+  assert.equal(match.score.balam, 1);
+  assert.equal(match.score.kuk, 0);
+});
+
+test('a tie at full time goes to sudden death and ends on the next point', () => {
+  const world = new World({ mode: 'match', humans: [] });
+  const match = new Match('match', world);
+  match.phase = 'playing';
+  match.timeLeft = 0.001;
+  match.score.balam = match.score.kuk = 4;
+  const events = match.update(1 / 60, []);
+  assert.ok(events.some((e) => e.type === 'suddenDeath'));
+  assert.equal(match.winner, null);
+  match.update(1 / 60, [{ type: 'ring', side: 1, ring: ringFor(1) }]);
+  assert.equal(match.winner, 'balam');
+});
+
+// ---------------------------------------------------------------- fairness
+test('neither end of the court is favoured by the update order', () => {
+  // Two identical players contest a ball placed exactly between them. Over many
+  // seeds each side must win roughly half of the first touches.
+  let balamFirst = 0;
+  const trials = 200;
+  for (let seed = 0; seed < trials; seed += 1) {
+    const world = new World({ mode: 'match', difficulty: 'normal', seed, humans: [] });
+    world.ball.pos.set(0, BALL_RADIUS + 1, 0);
+    world.ball.vel.set(0, 0, 0);
+    for (const player of world.players) player.pos.set(0, 0, TEAMS[player.team].attacks * -1.6);
+    let toucher = null;
+    for (let i = 0; i < 240 && !toucher; i += 1) {
+      for (const event of world.step(1 / 60)) if (event.type === 'strike') { toucher = event.player.team; break; }
+    }
+    if (toucher === 'balam') balamFirst += 1;
+  }
+  const share = balamFirst / trials;
+  assert.ok(share > .35 && share < .65, `balam took ${(share * 100).toFixed(0)}% of contested balls`);
+});
+
+test('a stronger difficulty beats a weaker one in both seats', () => {
+  const play = (balamProfile, kukProfile, seed) => {
+    const world = new World({ mode: 'match', difficulty: 'normal', seed, humans: [] });
+    for (const player of world.players) if (player.ai) player.ai.profile = player.team === 'balam' ? balamProfile : kukProfile;
+    const match = new Match('match', world);
+    for (let t = 0; match.phase !== 'ended' && t < 400 * 60; t += 1) {
+      match.update(1 / 60, world.step(match.phase === 'playing' ? 1 / 60 : 0));
+    }
+    return match.score;
+  };
+  let hardWins = 0;
+  for (let seed = 0; seed < 4; seed += 1) {
+    const a = play(DIFFICULTY.hard, DIFFICULTY.easy, seed);
+    if (a.balam > a.kuk) hardWins += 1;
+    const b = play(DIFFICULTY.easy, DIFFICULTY.hard, seed + 50);
+    if (b.kuk > b.balam) hardWins += 1;
+  }
+  assert.ok(hardWins >= 7, `Champion won only ${hardWins}/8 against Novice`);
+});
+
+test('the AI connects far more often than it swings at air', () => {
+  const world = new World({ mode: 'match', difficulty: 'normal', seed: 11, humans: [] });
+  const match = new Match('match', world);
+  let strikes = 0, whiffs = 0;
+  for (let t = 0; t < 120 * 60 && match.phase !== 'ended'; t += 1) {
+    const events = world.step(match.phase === 'playing' ? 1 / 60 : 0);
+    for (const event of events) { if (event.type === 'strike') strikes += 1; if (event.type === 'whiff') whiffs += 1; }
+    match.update(1 / 60, events);
+  }
+  assert.ok(strikes > 20, `only ${strikes} strikes`);
+  assert.ok(whiffs < strikes, `${whiffs} whiffs vs ${strikes} strikes`);
+});
+
+// ---------------------------------------------------------------- strikes
+test('charge power and strike type change the shot', () => {
+  const base = { position: new THREE.Vector3(0, BALL_RADIUS, 0), angle: 0, ring: northRing, assist: 0 };
+  const soft = strikeVelocity({ ...base, power: 0, kind: 'smash' });
+  const hard = strikeVelocity({ ...base, power: 1, kind: 'smash' });
+  assert.ok(hard.length() > soft.length() * 1.4, 'a full charge is much stronger');
+  const lob = strikeVelocity({ ...base, power: .5, kind: 'lob' });
+  const smash = strikeVelocity({ ...base, power: .5, kind: 'smash' });
+  assert.ok(lob.y > smash.y * 1.8, 'a lob climbs far more steeply');
+});
+
+test('aim assist never fires when the striker faces away from the ring', () => {
+  const position = new THREE.Vector3(0, BALL_RADIUS, 0);
+  const away = strikeVelocity({ position, angle: Math.PI, power: .6, kind: 'lob', ring: northRing, assist: 1 });
+  assert.ok(away.z < 0, 'the shot still travels away from the ring');
+});
+
+test('a charge released out of range is buffered, not thrown away', () => {
+  const world = new World({ mode: 'practice', humans: ['balam-striker'] });
+  const me = world.byId('balam-striker');
+  world.ball.pos.set(me.pos.x, BALL_RADIUS, me.pos.z + 2.6);   // just out of reach
+  world.ball.vel.set(0, 0, -6);                                 // travelling toward the player
+  const hold = { mx: 0, mz: 0, aim: 0, strike: true, lob: false, tackle: false };
+  world.step(1 / 60, { 'balam-striker': hold });
+  world.step(1 / 60, { 'balam-striker': { ...hold, strike: false } });
+  assert.ok(me.pendingStrike, 'the release is held as a pending strike');
+  let struck = false;
+  for (let i = 0; i < 30 && !struck; i += 1) {
+    struck = world.step(1 / 60, { 'balam-striker': { ...hold, strike: false } }).some((e) => e.type === 'strike');
+  }
+  assert.equal(struck, true, 'the buffered strike connects as the ball arrives');
+});
+
+test('a tackle stuns the victim and takes the ball', () => {
+  const world = new World({ mode: 'match', humans: ['balam-striker'] });
+  const me = world.byId('balam-striker'), victim = world.byId('kuk-striker');
+  me.pos.set(0, 0, 0); victim.pos.set(0, 0, 1.6);
+  world.ball.pos.set(0, BALL_RADIUS, 1.9); world.ball.vel.set(0, 0, 0);
+  me.facing = 0;
+  const events = [];
+  for (let i = 0; i < 20; i += 1) {
+    events.push(...world.step(1 / 60, { 'balam-striker': { mx: 0, mz: 0, aim: 0, strike: false, lob: false, tackle: i === 0 } }));
+  }
+  assert.ok(events.some((e) => e.type === 'tackle'));
+  assert.ok(victim.stun > 0, 'the victim is knocked down');
+  assert.ok(events.some((e) => e.type === 'steal'), 'the ball changes hands');
+});
+
+// ---------------------------------------------------------------- misc
+test('snapshots round-trip so the online guest sees the host state', () => {
+  const host = new World({ mode: 'match', seed: 3, humans: [] });
+  for (let i = 0; i < 120; i += 1) host.step(1 / 60);
+  const guest = new World({ mode: 'match', seed: 3, humans: [] });
+  guest.applySnapshot(host.snapshot());
+  assert.ok(guest.ball.pos.distanceTo(host.ball.pos) < 1e-6);
+  for (const player of host.players) {
+    assert.ok(guest.byId(player.id).pos.distanceTo(player.pos) < 1e-6, player.id);
+  }
+});
+
+test('the seeded generator is deterministic', () => {
+  const a = mulberry32(42), b = mulberry32(42);
+  for (let i = 0; i < 50; i += 1) assert.equal(a(), b());
+});
+
+test('Maya numerals use bars, dots and a shell for zero', () => {
+  assert.match(mayaNumeralSVG(0), /ellipse/);           // shell
+  const five = mayaNumeralSVG(5);
+  assert.equal((five.match(/<rect/g) || []).length, 1); // one bar
+  assert.equal((five.match(/<circle/g) || []).length, 0);
+  const seven = mayaNumeralSVG(7);
+  assert.equal((seven.match(/<rect/g) || []).length, 1);
+  assert.equal((seven.match(/<circle/g) || []).length, 2);
+  assert.ok(mayaNumeralSVG(20).split('<svg').length === 2);
+});
+
+test('players and rings stay inside the court', () => {
+  const world = new World({ mode: 'match', seed: 5, humans: [] });
+  for (let i = 0; i < 600; i += 1) world.step(1 / 60);
+  for (const player of world.players) {
+    assert.ok(Math.abs(player.pos.x) <= COURT_WIDTH / 2, player.id + ' x');
+    assert.ok(Math.abs(player.pos.z) <= COURT_LENGTH / 2, player.id + ' z');
+    assert.ok(Number.isFinite(player.pos.x) && Number.isFinite(player.pos.z));
+  }
+  assert.ok(Number.isFinite(world.ball.pos.x), 'ball stays numeric');
+  for (const ring of RINGS) assert.ok(Math.abs(ring.center.z) < COURT_LENGTH / 2, 'ring sits inside the end line');
+});
+
+test('supplied arena inner court aligns with game coordinates', async () => {
+  const model = new OBJLoader().parse(await readFile('public/assets/arena/arena.obj', 'utf8'));
   alignArena(model);
-  const {centerX,centerZ,floorY,scale}=ARENA_LAYOUT;
-  assert.ok(new THREE.Vector3(centerX,floorY,centerZ).applyMatrix4(model.matrixWorld).length()<1e-6);
-  const side=new THREE.Vector3(centerX,floorY,centerZ+7/scale).applyMatrix4(model.matrixWorld);
-  assert.ok(Math.abs(side.x-7)<1e-6);
+  const { centerX, centerZ, floorY, scale } = ARENA_LAYOUT;
+  assert.ok(new THREE.Vector3(centerX, floorY, centerZ).applyMatrix4(model.matrixWorld).length() < 1e-6);
+  const side = new THREE.Vector3(centerX, floorY, centerZ + 7 / scale).applyMatrix4(model.matrixWorld);
+  assert.ok(Math.abs(side.x - 7) < 1e-6);
 });
-async function characterSource(){
+
+async function characterSource() {
   // Use the real mesh/skeleton; omit image decoding only for the Node test.
-  const bytes=await readFile('public/assets/characters/player.glb');
-  const length=bytes.readUInt32LE(12),json=JSON.parse(bytes.subarray(20,20+length).toString());
-  delete json.materials;delete json.textures;delete json.images;
-  for(const mesh of json.meshes)for(const primitive of mesh.primitives)delete primitive.material;
-  const offset=20+length,size=bytes.readUInt32LE(offset);
-  json.buffers[0].uri='data:application/octet-stream;base64,'+bytes.subarray(offset+8,offset+8+size).toString('base64');
-  globalThis.ProgressEvent ||= class ProgressEvent {constructor(type,init={}){Object.assign(this,{type},init);}};
-  return (await new GLTFLoader().parseAsync(JSON.stringify(json),'')).scene;
+  const bytes = await readFile('public/assets/characters/player.glb');
+  const length = bytes.readUInt32LE(12), json = JSON.parse(bytes.subarray(20, 20 + length).toString());
+  delete json.materials; delete json.textures; delete json.images;
+  for (const mesh of json.meshes) for (const primitive of mesh.primitives) delete primitive.material;
+  const offset = 20 + length, size = bytes.readUInt32LE(offset);
+  json.buffers[0].uri = 'data:application/octet-stream;base64,' + bytes.subarray(offset + 8, offset + 8 + size).toString('base64');
+  globalThis.ProgressEvent ||= class ProgressEvent { constructor(type, init = {}) { Object.assign(this, { type }, init); } };
+  return (await new GLTFLoader().parseAsync(JSON.stringify(json), '')).scene;
 }
-test('real characters are equally scaled, animate independently, stay grounded and recover from strikes',async()=>{
-  const pair=spawnPair(new THREE.Scene(),await characterSource());
-  assert.equal(pair.playerBones.procedural,false);assert.equal(pair.aiBones.procedural,false);
-  const heights=[];
-  for(const root of [pair.playerChar,pair.aiChar]){
-    root.position.set(0,0,0);root.updateMatrixWorld(true);
-    const height=new THREE.Box3().setFromObject(root,true).getSize(new THREE.Vector3()).y;
-    assert.ok(Math.abs(height-TARGET_HEIGHT)<.12,'height '+height);heights.push(height);
-  }
-  assert.ok(Math.abs(heights[0]-heights[1])<1e-5);
-  const rig=pair.playerBones,rival=pair.aiBones.rest.LeftUpLeg.bone.quaternion.clone();
-  animateCharacter(rig,7.2,0,1/60,1);
-  assert.ok(rig.rest.LeftUpLeg.bone.quaternion.angleTo(rig.rest.LeftUpLeg.quaternion)>.001);
-  assert.ok(pair.aiBones.rest.LeftUpLeg.bone.quaternion.angleTo(rival)<1e-6);
-  for(let i=0;i<120;i++)animateCharacter(rig,7.2,0,1/60,i/60);
+
+test('every fighter is spawned, scaled alike and animates independently', async () => {
+  const world = new World({ mode: 'match', humans: ['balam-striker'] });
+  const { fighters } = spawnRoster(new THREE.Scene(), await characterSource(), world.players);
+  assert.equal(fighters.length, 4);
+  assert.deepEqual(fighters.map((f) => f.id), ['balam-striker', 'balam-keeper', 'kuk-striker', 'kuk-keeper']);
+  assert.equal(fighters.filter((f) => f.control === 'human').length, 1);
+  assert.equal(fighters.filter((f) => f.team === 'balam').length, 2);
+  const heights = fighters.map((fighter) => {
+    fighter.character.position.set(0, 0, 0); fighter.character.updateMatrixWorld(true);
+    return new THREE.Box3().setFromObject(fighter.character, true).getSize(new THREE.Vector3()).y;
+  });
+  for (const height of heights) assert.ok(Math.abs(height - TARGET_HEIGHT) < .12, 'height ' + height);
+  const rig = fighters[0].rig, other = fighters[1].rig.rest.LeftUpLeg.bone.quaternion.clone();
+  animateCharacter(rig, 7.2, 0, 1 / 60, 1);
+  assert.ok(rig.rest.LeftUpLeg.bone.quaternion.angleTo(rig.rest.LeftUpLeg.quaternion) > .001, 'the runner animates');
+  assert.ok(fighters[1].rig.rest.LeftUpLeg.bone.quaternion.angleTo(other) < 1e-6, 'others are untouched');
+  for (let i = 0; i < 120; i += 1) animateCharacter(rig, 7.2, 0, 1 / 60, i / 60);
   rig.root.updateMatrixWorld(true);
-  const low=Math.min(...rig.feet.map(b=>b.getWorldPosition(new THREE.Vector3()).y));
-  assert.ok(Math.abs(low-rig.footHeight)<.01);
-  animateCharacter(rig,0,.225,1/60,2);
-  assert.ok(rig.rest.Hips.bone.quaternion.angleTo(rig.rest.Hips.quaternion)>.2);
-  for(let i=0;i<120;i++)animateCharacter(rig,0,0,1/60,2+i/60);
-  assert.ok(rig.rest.Hips.bone.quaternion.angleTo(rig.rest.Hips.quaternion)<.01);
+  const low = Math.min(...rig.feet.map((bone) => bone.getWorldPosition(new THREE.Vector3()).y));
+  assert.ok(Math.abs(low - rig.footHeight) < .01, 'feet stay on the stone');
 });

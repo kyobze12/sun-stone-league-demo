@@ -39,12 +39,15 @@ export function strikeVelocity({ position, angle, power, kind, ring, assist = 0,
   const toward = new THREE.Vector3(ring.x - position.x, 0, ring.z - position.z);
   const distance = toward.length();
   const dot = aim.dot(toward.normalize());
-  const cone = Math.cos(THREE.MathUtils.degToRad(kind === 'lob' ? 26 : 16));
+  // A lob is the deliberate ring attempt, so it gets a wider assist cone.
+  const cone = Math.cos(THREE.MathUtils.degToRad(kind === 'lob' ? 34 : 16));
   if (assist > 0 && distance > 2.5 && distance < 19 && dot > cone) {
     const solution = ringSolution(position, ring, gravityScale);
     const closeness = THREE.MathUtils.smoothstep(dot, cone, 1);
     const powerFit = kind === 'lob' ? 1 : THREE.MathUtils.clamp(1 - Math.abs(p - .6) * 1.1, .35, 1);
-    velocity.lerp(solution, assist * closeness * powerFit);
+    // Lobs commit harder to the ring solution than flat smashes do.
+    const commit = kind === 'lob' ? 1.12 : 1;
+    velocity.lerp(solution, Math.min(.97, assist * closeness * powerFit * commit));
   }
   return velocity;
 }

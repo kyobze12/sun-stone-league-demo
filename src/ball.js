@@ -61,7 +61,6 @@ export class BallState {
     this.pos.addScaledVector(this.vel, dt);
     this.pos.y += .5 * g * dt * dt;
     this.vel.y += g * dt;
-    this.vel.multiplyScalar(Math.exp(-.1 * dt)); // light air drag
     this.heldCooldown = Math.max(0, this.heldCooldown - dt);
     for (const team of ['balam', 'kuk']) this.shields[team] = Math.max(0, this.shields[team] - dt);
 

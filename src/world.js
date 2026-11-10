@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import {
   COURT_WIDTH, COURT_LENGTH, PLAYER_SPEED, PLAYER_RADIUS, HIT_RANGE, HIT_MAX_HEIGHT, CHARGE_TIME,
-  STRIKE_COOLDOWN, TACKLE_COOLDOWN, TACKLE_DURATION, TACKLE_DISTANCE, TACKLE_HIT_RADIUS, STUN_TIME,
+  STRIKE_COOLDOWN, STRIKE_BUFFER, TACKLE_COOLDOWN, TACKLE_DURATION, TACKLE_DISTANCE, TACKLE_HIT_RADIUS, STUN_TIME,
   TEAMS, OTHER_TEAM, ROSTER, DIFFICULTY, POWERUPS, POWERUP_SPAWN_INTERVAL, POWERUP_LIFETIME, BALL_RADIUS,
 } from './config.js';
 import { BallState, RINGS, ringFor } from './ball.js';
@@ -37,6 +37,7 @@ export class Player {
     this.dash = 0;             // time left in a tackle dash
     this.dashDir = new THREE.Vector3();
     this.swingTimer = 0;
+    this.pendingStrike = null;
     this.wind = 0;             // Kukulkan's Wind time left
     this.jaguar = false;       // Jaguar Heart armed
     this.prevInput = { ...EMPTY_INPUT };
@@ -57,6 +58,7 @@ export class World {
   constructor({ mode = 'match', difficulty = 'normal', seed = 1, humans = ['balam-striker'], serveSide = 0 } = {}) {
     this.mode = mode;
     this.difficulty = difficulty;
+    this.seed = seed;
     this.random = mulberry32(seed);
     this.ball = new BallState();
     this.players = [];
@@ -79,7 +81,9 @@ export class World {
         player.spawn.set(spec.offset[0] * sign, 0, spec.offset[2] * sign);
         if (player.control === 'ai') {
           const profile = team === 'kuk' || mode === 'ringhunt' ? DIFFICULTY[difficulty] : DIFFICULTY.normal;
-          player.ai = new AIController(player, profile, this.random);
+          // Each AI draws from its own stream. Sharing one generator made the
+          // draw order (and so the team listed first) a systematic advantage.
+          player.ai = new AIController(player, profile, mulberry32(seed * 2654435761 + player.index * 40503 + 7));
         }
         this.players.push(player);
       }
@@ -101,6 +105,7 @@ export class World {
       player.aim = player.facing;
       player.stun = player.dash = player.hitCooldown = player.swingTimer = 0;
       player.charge = -1;
+      player.pendingStrike = null;
       player.speed = 0;
       player.prevInput = { ...EMPTY_INPUT };
       if (player.ai) player.ai.reset();
@@ -138,15 +143,29 @@ export class World {
       }
     }
 
-    for (const player of this.players) {
-      const input = player.ai ? player.ai.decide(this, dt) : (inputs[player.id] || EMPTY_INPUT);
-      this.updatePlayer(player, input, dt, events);
-    }
+    // Decide every player's input against the same pre-step state, then apply.
+    // Deciding and moving in one pass let whoever was listed first react to the
+    // others' new positions — a half-frame edge that decided mirror matches.
+    const decided = this.players.map((player) => (player.ai ? player.ai.decide(this, dt) : (inputs[player.id] || EMPTY_INPUT)));
+    // Apply in a shuffled order too. On a 50/50 ball the player resolved first
+    // takes it and the other whiffs, so a fixed order handed every contested
+    // ball to the team listed first — worth ~80% of mirror matches.
+    for (const i of this.shuffledOrder()) this.updatePlayer(this.players[i], decided[i], dt, events);
     this.separatePlayers();
     this.nudgeBall(dt);
 
     for (const event of ball.update(dt)) events.push(event);
     return events;
+  }
+
+  /** Fisher-Yates over player indices, driven by the world RNG so replays match. */
+  shuffledOrder() {
+    const order = this._order || (this._order = this.players.map((_, i) => i));
+    for (let i = order.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(this.random() * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    return order;
   }
 
   updatePlayer(player, input, dt, events) {
@@ -158,6 +177,7 @@ export class World {
     if (player.stun > 0) {
       player.stun = Math.max(0, player.stun - dt);
       player.charge = -1;
+      player.pendingStrike = null;
     } else if (player.dash > 0) {
       player.dash = Math.max(0, player.dash - dt);
       player.pos.addScaledVector(player.dashDir, (TACKLE_DISTANCE / TACKLE_DURATION) * dt);
@@ -186,7 +206,17 @@ export class World {
       if (player.charge >= 0 && !held) {
         const power = player.charge;
         player.charge = -1;
-        this.tryStrike(player, power, player.chargeKind, events);
+        // Input buffering: a release a fraction of a second before the ball
+        // arrives still connects. Without this, charge-and-release feels like
+        // it is swallowing inputs rather than rewarding timing.
+        if (this.canStrike(player)) this.tryStrike(player, power, player.chargeKind, events);
+        else if (this.ballDistance(player) > HIT_RANGE * 2.4) player.pendingStrike = null; // nowhere near: a cancel, not a flail
+        else player.pendingStrike = { power, kind: player.chargeKind, time: STRIKE_BUFFER };
+      }
+      if (player.pendingStrike) {
+        player.pendingStrike.time -= dt;
+        if (this.canStrike(player)) { const s = player.pendingStrike; player.pendingStrike = null; this.tryStrike(player, s.power, s.kind, events); }
+        else if (player.pendingStrike.time <= 0) { player.pendingStrike = null; player.swingTimer = .45; player.hitCooldown = .22; events.push({ type: 'whiff', player }); }
       }
       if (input.tackle && !player.prevInput.tackle && player.tackleCooldown <= 0) {
         player.dash = TACKLE_DURATION;
@@ -242,7 +272,8 @@ export class World {
   nudgeBall(dt) {
     const ball = this.ball;
     if (ball.pos.y > BALL_RADIUS + .6 || ball.heldCooldown > 0) return;
-    for (const player of this.players) {
+    for (const index of this.shuffledOrder()) {
+      const player = this.players[index];
       const dx = ball.pos.x - player.pos.x, dz = ball.pos.z - player.pos.z;
       const d = Math.hypot(dx, dz);
       if (d < PLAYER_RADIUS + BALL_RADIUS && d > 1e-4 && ball.vel.length() < 4) {
@@ -262,11 +293,11 @@ export class World {
   tryStrike(player, power, kind, events) {
     player.swingTimer = .45;
     const ok = this.canStrike(player);
-    player.hitCooldown = ok ? STRIKE_COOLDOWN : .25;
+    player.hitCooldown = ok ? STRIKE_COOLDOWN : .22;
     if (!ok) { events.push({ type: 'whiff', player }); return false; }
     const ball = this.ball;
     const profile = player.ai ? player.ai.profile : DIFFICULTY[this.difficulty];
-    const assist = player.ai ? profile.assist * .9 : profile.assist;
+    const assist = player.ai ? profile.aiAssist : profile.assist;
     const angle = player.aim;
     const boost = player.jaguar ? 1.5 : 1;
     const velocity = strikeVelocity({ position: ball.pos, angle, power: .45 + .55 * power, kind, ring: this.targetRing(player), assist, boost, gravityScale: ball.gravityScale });
@@ -283,9 +314,13 @@ export class World {
     return true;
   }
 
-  inRange(player) {
+  ballDistance(player) {
     const ball = this.ball;
-    return ball.pos.distanceTo(player.pos.clone().setY(ball.pos.y)) <= HIT_RANGE && ball.pos.y <= HIT_MAX_HEIGHT;
+    return ball.pos.distanceTo(player.pos.clone().setY(ball.pos.y));
+  }
+
+  inRange(player) {
+    return this.ballDistance(player) <= HIT_RANGE && this.ball.pos.y <= HIT_MAX_HEIGHT;
   }
 
   shockwave(player, events) {

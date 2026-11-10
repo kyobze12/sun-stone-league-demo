@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COURT_LENGTH, COURT_WIDTH, HIT_RANGE, HIT_MAX_HEIGHT, BACK_ZONE, GRAVITY, BALL_RADIUS, TACKLE_HIT_RADIUS } from './config.js';
+import { COURT_LENGTH, COURT_WIDTH, HIT_RANGE, HIT_MAX_HEIGHT, BACK_ZONE, GRAVITY, BALL_RADIUS, CHARGE_TIME, TACKLE_HIT_RADIUS } from './config.js';
 
 /**
  * Role-aware AI that produces the same input shape a human produces, so the
@@ -22,7 +22,8 @@ export class AIController {
     this.target = this.player.spawn.clone();
     this.plan = 'hold';
     this.chargeTimer = 0;
-    this.releaseAt = 0;
+    this.releaseAt = .4;
+    this.intercept = { point: this.player.spawn.clone(), time: Infinity };
     this.kind = 'smash';
     this.aimError = 0;
     this.wantTackle = false;
@@ -31,6 +32,7 @@ export class AIController {
 
   decide(world, dt) {
     const me = this.player, ball = world.ball;
+    this.intercept = this.predictIntercept(world);
     this.think -= dt;
     if (this.think <= 0) {
       this.think = this.profile.reaction * (.8 + this.random() * .4);
@@ -45,21 +47,27 @@ export class AIController {
     const d = Math.hypot(dx, dz);
     if (d > .25) { input.mx = dx / d; input.mz = dz / d; } else { input.mx = 0; input.mz = 0; }
 
-    // Striking: charge when the ball is reachable, release when charged enough
-    // or when the ball is about to leave range.
-    const reachable = world.inRange(me) && ball.heldCooldown <= 0 && me.hitCooldown <= 0 && !me.busy;
-    const arriving = this.ballArrivingSoon(world);
+    // Striking. The AI winds up while the ball is still travelling toward it and
+    // lets go the moment the ball is actually in range, so its power comes from
+    // reading the play early — the same skill a human is exercising. Holding to
+    // a fixed charge target instead made it swing at empty air constantly.
+    const free = ball.heldCooldown <= 0 && me.hitCooldown <= 0 && !me.busy;
+    const reachable = world.inRange(me) && free;
+    const windup = this.releaseAt * CHARGE_TIME + .08;
+    const incoming = this.intercept.time <= windup;
     if (me.charge < 0) {
       input.strike = false; input.lob = false;
-      if ((reachable || arriving) && me.hitCooldown <= 0 && !me.busy) {
+      if (free && (reachable || incoming)) {
         this.kind = this.chooseKind(world);
-        this.releaseAt = this.profile.charge * (.5 + this.random() * .5);
+        this.releaseAt = this.profile.charge * (.55 + this.random() * .45);
         input.strike = this.kind === 'smash'; input.lob = this.kind === 'lob';
         input.aim = this.aimAngle(world);
       }
     } else {
       input.aim = this.aimAngle(world);
-      const hold = !(me.charge >= this.releaseAt && reachable) && (reachable || arriving);
+      // Release on contact, or bail out if the ball is no longer coming at all.
+      const lost = !reachable && this.intercept.time > windup + .6;
+      const hold = !reachable && !lost;
       input.strike = hold && this.kind === 'smash'; input.lob = hold && this.kind === 'lob';
     }
 
@@ -77,18 +85,11 @@ export class AIController {
     return input;
   }
 
-  ballArrivingSoon(world) {
-    const ball = world.ball, me = this.player;
-    const future = ball.pos.clone().addScaledVector(ball.vel, .18);
-    future.y += .5 * GRAVITY * ball.gravityScale * .18 * .18;
-    return future.distanceTo(me.pos.clone().setY(Math.max(BALL_RADIUS, future.y))) <= HIT_RANGE * .95 && future.y <= HIT_MAX_HEIGHT && future.y > 0;
-  }
-
   chooseKind(world) {
     const me = this.player, ring = world.targetRing(me);
     const dist = Math.hypot(ring.x - me.pos.x, ring.z - me.pos.z);
     // Lob for ring attempts in mid range, smash to push the ball down court.
-    if (dist < 13 && dist > 3 && this.random() < .7) return 'lob';
+    if (dist < 16 && dist > 3 && this.random() < this.profile.lob) return 'lob';
     return 'smash';
   }
 
@@ -110,7 +111,7 @@ export class AIController {
     const myEnd = -me.attacks * COURT_LENGTH / 2;
     const ballOnMySide = Math.sign(ball.pos.z) === -me.attacks || Math.abs(ball.pos.z) < 1;
     const ballComing = Math.sign(ball.vel.z) === -me.attacks && ball.vel.length() > 2;
-    const landing = this.predictLanding(world);
+    const landing = this.intercept.point;
     const mates = world.teammates(me);
     const myDist = me.pos.distanceTo(landing), mateDist = Math.min(Infinity, ...mates.map((m) => m.pos.distanceTo(landing)));
     const nearest = myDist <= mateDist + .5;
@@ -132,14 +133,15 @@ export class AIController {
     return 'support';
   }
 
-  // Earliest point on the ball's path that this player can reach in time.
-  predictLanding(world) {
+  // Earliest point on the ball's path this player can both reach and strike,
+  // plus how many seconds away it is. Drives movement and the wind-up timing.
+  predictIntercept(world) {
     const ball = world.ball, me = this.player;
     const p = ball.pos.clone(), v = ball.vel.clone();
     const g = GRAVITY * ball.gravityScale;
     const step = 1 / 30;
     const speed = me.moveSpeed * .95;
-    let best = null;
+    let best = null, bestTime = Infinity, fallback = null;
     for (let i = 1; i <= 90; i += 1) {
       p.addScaledVector(v, step); v.y += g * step;
       if (Math.abs(p.x) > COURT_WIDTH / 2 - BALL_RADIUS) { p.x = Math.sign(p.x) * (COURT_WIDTH / 2 - BALL_RADIUS); v.x *= -.66; }
@@ -147,15 +149,16 @@ export class AIController {
       if (p.y < BALL_RADIUS) { p.y = BALL_RADIUS; v.y = Math.abs(v.y) > .8 ? -v.y * .66 : 0; v.x *= .93; v.z *= .93; }
       if (p.y <= HIT_MAX_HEIGHT * .85) {
         const t = i * step;
-        const travel = Math.hypot(p.x - me.pos.x, p.z - me.pos.z) / speed;
-        if (travel <= t + .1) { best = p.clone(); break; }
+        const travel = Math.max(0, Math.hypot(p.x - me.pos.x, p.z - me.pos.z) - HIT_RANGE * .7) / speed;
+        if (travel <= t + .1) { best = p.clone(); bestTime = t; break; }
       }
-      best = p.clone();
+      fallback = p.clone();
     }
-    best.x = THREE.MathUtils.clamp(best.x, -COURT_WIDTH / 2 + .8, COURT_WIDTH / 2 - .8);
-    best.z = THREE.MathUtils.clamp(best.z, -COURT_LENGTH / 2 + 1, COURT_LENGTH / 2 - 1);
-    best.y = 0;
-    return best;
+    const point = best || fallback || me.pos.clone();
+    point.x = THREE.MathUtils.clamp(point.x, -COURT_WIDTH / 2 + .8, COURT_WIDTH / 2 - .8);
+    point.z = THREE.MathUtils.clamp(point.z, -COURT_LENGTH / 2 + 1, COURT_LENGTH / 2 - 1);
+    point.y = 0;
+    return { point, time: bestTime };
   }
 }
 

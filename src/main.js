@@ -1,334 +1,551 @@
 import * as THREE from 'three';
-import { createCourt, loadArenaModel, updateCourt, addLighting, COURT_WIDTH, COURT_LENGTH } from './court.js';
-import { loadCharacters, animateCharacter } from './characters.js';
-import { createBall, updateBallVisual, BallState } from './ball.js';
-import { setupInput, getMoveVector } from './input.js';
-import * as Input from './input.js';
-import { shotVelocity } from './shot.js';
-import { getAITarget, scoringTeam, shouldAIAttemptHit } from './teams.js';
+import { createCourt, loadArenaModel, updateCourt, addLighting } from './court.js';
+import { loadCharacterModel, spawnRoster, animateCharacter } from './characters.js';
+import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
+import { setupInput, readInput, resetInput, isTouch } from './input.js';
+import { World, EMPTY_INPUT } from './world.js';
+import { Match } from './match.js';
+import { NetSession } from './net.js';
+import { mayaNumeralSVG, CALLOUTS, pick } from './maya.js';
+import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE } from './config.js';
+import { RINGS } from './ball.js';
+import { Audio } from './audio.js';
 
 const $ = (id) => document.getElementById(id);
-function hasWebGL() {
-  try { const c = document.createElement('canvas'); return Boolean(window.WebGLRenderingContext && c.getContext('webgl')); } catch { return false; }
-}
+function hasWebGL() { try { const c = document.createElement('canvas'); return Boolean(window.WebGLRenderingContext && c.getContext('webgl')); } catch { return false; } }
 if (!hasWebGL()) { $('webgl-error').style.display = 'flex'; throw new Error('WebGL unavailable'); }
 
+// ------------------------------------------------------------ renderer & scene
+let quality = detectQuality();
+$('quality').value = quality;
 const canvas = $('game-canvas');
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, innerWidth < 900 ? 1.35 : 1.8));
-renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
-
+const renderer = createRenderer(canvas, quality);
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0xaab3ac, .004);
-const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 400);
-camera.position.set(0, 4.5, 8);
+scene.fog = new THREE.FogExp2(0xb8947a, .0032);
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 420);
+camera.position.set(0, 7, -16);
+let composer = createComposer(renderer, scene, camera, quality);
+const touch = isTouch();
+
 addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setPixelRatio(Math.min(devicePixelRatio,matchMedia('(pointer: coarse)').matches?1.35:1.8));
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY[quality].pixelRatio));
   renderer.setSize(innerWidth, innerHeight);
+  composer?.setSize(innerWidth, innerHeight);
 });
 
-addLighting(scene);
-const { ringMesh, ringWorldPos, arena, fallbackDecor } = createCourt(scene);
+const lights = addLighting(scene);
+const { arena, fallbackDecor, goals, crowd } = createCourt(scene);
+if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
 const ballMesh = createBall(scene);
-const ballState = new BallState();
+const particles = new Particles(scene, QUALITY[quality].particles);
+const powerupVisuals = new PowerupVisuals(scene);
+const cameraRig = new CameraRig(camera);
+const audio = new Audio();
 
 const manager = new THREE.LoadingManager();
 manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Math.round(loaded / total * 100)}%`; };
-manager.onLoad = () => {};
-manager.onError = () => { $('loading-note').textContent = 'Using optimized arena warrior'; };
-
-const arenaReady = loadArenaModel(arena, fallbackDecor, manager).catch(() => {
-  fallbackDecor.visible = true;
-  $('loading-note').textContent = 'Arena fallback active';
-});
-
-let playerChar = null, playerRig = null, aiFighters = [];
-const STRIKER_MODEL = './assets/characters/player.glb';
-const charactersReady = loadCharacters(scene, manager, STRIKER_MODEL).then((result) => {
-  playerChar = result.player.character; playerRig = result.player.rig;
-  aiFighters = result.ai;
-  for (const fighter of result.fighters) {
-    const marker = new THREE.Mesh(
-      new THREE.CircleGeometry(.48, 24),
-      new THREE.MeshBasicMaterial({ color: fighter.team === 'sun' ? 0x12c9b5 : 0xed4050, transparent: true, opacity: .22, depthWrite: false })
-    );
-    marker.rotation.x = -Math.PI / 2;
-    marker.position.y = .035;
-    fighter.character.add(marker);
-    fighter.marker = marker;
-  }
-  setAIVisibility(mode === 'versus');
-});
-Promise.all([arenaReady,charactersReady]).then(()=>{
+manager.onError = () => { $('loading-note').textContent = 'Using sculpted fallback'; };
+const arenaReady = loadArenaModel(arena, fallbackDecor, manager).catch(() => { fallbackDecor.visible = true; });
+let characterSource = null;
+const charactersReady = loadCharacterModel(manager, './assets/characters/player.glb').then((model) => { characterSource = model; });
+Promise.all([arenaReady, charactersReady]).then(() => {
   $('loading').classList.add('depart');
-  setTimeout(()=>{$('loading').style.display='none';},450);
+  setTimeout(() => { $('loading').style.display = 'none'; }, 450);
+  showMenu();
 });
 
+// Aim indicator under the controlled player
 const aimGroup = new THREE.Group();
-const aimRing = new THREE.Mesh(new THREE.RingGeometry(.6, .69, 32), new THREE.MeshBasicMaterial({ color: 0x43d5bb, transparent: true, opacity: .75, side: THREE.DoubleSide, depthWrite: false }));
+const aimRing = new THREE.Mesh(new THREE.RingGeometry(.62, .72, 32), new THREE.MeshBasicMaterial({ color: 0xffd34e, transparent: true, opacity: .75, side: THREE.DoubleSide, depthWrite: false }));
 aimRing.rotation.x = -Math.PI / 2;
-const aimArrow = new THREE.Mesh(new THREE.ConeGeometry(.16, .55, 8), new THREE.MeshBasicMaterial({ color: 0xffbc45 }));
-aimArrow.rotation.x = Math.PI / 2; aimArrow.position.z = .82; aimArrow.position.y = .08;
+const aimArrow = new THREE.Mesh(new THREE.ConeGeometry(.17, .6, 8), new THREE.MeshBasicMaterial({ color: 0xffd34e }));
+aimArrow.rotation.x = Math.PI / 2; aimArrow.position.z = .95; aimArrow.position.y = .08;
 aimGroup.add(aimRing, aimArrow); scene.add(aimGroup);
+const practiceMarker = new THREE.Mesh(new THREE.RingGeometry(.8, 1.05, 32), new THREE.MeshBasicMaterial({ color: 0x7fe9ff, transparent: true, opacity: .85, side: THREE.DoubleSide, depthWrite: false }));
+practiceMarker.rotation.x = -Math.PI / 2; practiceMarker.position.y = .05; practiceMarker.visible = false; scene.add(practiceMarker);
 
-const particleGeometry = new THREE.SphereGeometry(.055, 5, 4);
-const particles = [];
-function burst(position, color = 0xffa52b, count = 16) {
-  const material = new THREE.MeshBasicMaterial({ color, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false });
-  material.userData.remaining=count;
-  for (let i = 0; i < count; i += 1) {
-    const particle = new THREE.Mesh(particleGeometry, material);
-    particle.position.copy(position);
-    particle.userData.velocity = new THREE.Vector3((Math.random()-.5)*5, Math.random()*4.5, (Math.random()-.5)*5);
-    particle.userData.life = .45 + Math.random() * .35;
-    scene.add(particle); particles.push(particle);
-  }
-}
-function updateParticles(dt) {
-  for (let i = particles.length - 1; i >= 0; i -= 1) {
-    const particle = particles[i];
-    particle.userData.life -= dt;
-    particle.userData.velocity.y -= 8 * dt;
-    particle.position.addScaledVector(particle.userData.velocity, dt);
-    particle.material.opacity = Math.max(0, particle.userData.life * 1.8);
-    if (particle.userData.life <= 0) { scene.remove(particle); particles.splice(i,1); if(--particle.material.userData.remaining===0)particle.material.dispose(); }
-  }
-}
+// ------------------------------------------------------------ game state
+const G = {
+  mode: null, world: null, match: null, fighters: new Map(), humans: [], localIds: [],
+  net: null, role: 'local', paused: false, timeScale: 1, slowmo: 0, excitement: 0,
+  guest: { snapshots: [], lastInput: null }, tutorial: null, elapsed: 0,
+};
+const clock = new THREE.Clock();
 
-let audioContext = null;
-function tone(frequency, duration, type = 'sine', volume = .06) {
-  try {
-    audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
-    if(audioContext.state==='suspended')audioContext.resume();
-    const oscillator = audioContext.createOscillator(); const gain = audioContext.createGain();
-    oscillator.type = type; oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
-    gain.gain.setValueAtTime(volume, audioContext.currentTime);
-    gain.gain.exponentialRampToValueAtTime(.001, audioContext.currentTime + duration);
-    oscillator.connect(gain).connect(audioContext.destination); oscillator.start(); oscillator.stop(audioContext.currentTime + duration);
-  } catch { /* Audio is optional. */ }
-}
+function controlledId() { return G.localIds[0]; }
+function controlled() { return G.world?.byId(controlledId()); }
+function facingOf(id) { const p = G.world?.byId(id); return p ? TEAMS[p.team].attacks : 1; }
 
-const TARGET_SCORE = 3, SOLO_SECONDS = 60, HIT_RANGE = 2.05, PLAYER_SPEED = 7.2, AI_SPEED = 5.05;
-let mode = null, phase = 'menu', scorePlayer = 0, scoreAI = 0, timeLeft = SOLO_SECONDS;
-let playerHitCooldown = 0, playerSwingTimer = 0;
-let lastTouch = 'sun', currentAimAngle = 0, shake = 0;
-let goalTime=0,countdownTime=0,paused=false,playerMoveSpeed=0;
-
-function setAIVisibility(visible) {
-  for (const fighter of aiFighters) {
-    fighter.character.visible = visible;
-    fighter.enabled = visible;
-  }
-}
-
+// ------------------------------------------------------------ UI helpers
+function show(id, on = true) { $(id).style.display = on ? 'flex' : 'none'; }
 function callout(text, kind = '') {
   const element = $('callout'); element.textContent = text; element.className = kind;
   element.classList.remove('show'); requestAnimationFrame(() => element.classList.add('show'));
+  clearTimeout(callout.timer); callout.timer = setTimeout(() => element.classList.remove('show'), kind === 'score' ? 1800 : 1100);
+}
+function flash() { const f = $('flash'); f.classList.add('on'); requestAnimationFrame(() => setTimeout(() => f.classList.remove('on'), 60)); }
+function formatTime(seconds) { const m = Math.floor(seconds / 60), s = Math.ceil(seconds % 60); return s === 60 ? `${m + 1}:00` : `${m}:${String(s).padStart(2, '0')}`; }
+function records() {
+  const best = Number(localStorage.getItem('ssl-best-ringhunt') || 0);
+  const wins = Number(localStorage.getItem('ssl-wins') || 0);
+  $('records').textContent = `Ring Hunt best: ${best}  ·  Match wins: ${wins}`;
+}
+function showMenu() {
+  G.mode = null; G.paused = false;
+  resetInput();
+  for (const id of ['hud', 'status-strip', 'touch-controls', 'pause-btn', 'hint', 'tutorial']) $(id).classList.add('hidden');
+  for (const id of ['endscreen', 'pause-screen', 'countdown', 'online', 'howto']) show(id, false);
+  show('menu', true);
+  practiceMarker.visible = false;
+  cameraRig.stopCinematic();
+  records();
+  closeNet();
+  if (!G.world) { G.world = new World({ mode: 'match', humans: [] }); G.match = null; rebuildFighters(); }
 }
 
-function resetPositions() {
-  ballState.reset(); Input.resetInput();
-  playerHitCooldown=playerSwingTimer=0;
-  lastTouch='sun';playerMoveSpeed=0;
-  ballMesh.userData.history.length=0;
-  if (playerChar) { playerChar.position.set(-2.2, 0, -7); playerChar.rotation.y = 0; }
-  for (const fighter of aiFighters) {
-    fighter.character.position.set(...fighter.position);
-    fighter.character.rotation.y = fighter.team === 'sun' ? Math.PI : 0;
-    fighter.hitCooldown = 0;
-    fighter.swingTimer = 0;
-    fighter.moveSpeed = 0;
+// ------------------------------------------------------------ fighters (render side)
+function rebuildFighters() {
+  for (const fighter of G.fighters.values()) scene.remove(fighter.character);
+  G.fighters.clear();
+  const { fighters } = spawnRoster(scene, characterSource, G.world.players);
+  for (const fighter of fighters) {
+    const marker = new THREE.Mesh(new THREE.CircleGeometry(.52, 24), new THREE.MeshBasicMaterial({ color: TEAMS[fighter.team].color, transparent: true, opacity: .26, depthWrite: false }));
+    marker.rotation.x = -Math.PI / 2; marker.position.y = .035; fighter.character.add(marker); fighter.marker = marker;
+    const label = makeLabel(fighter.slot === 'keeper' ? 'KEEPER' : 'STRIKER', TEAMS[fighter.team].css);
+    label.position.y = 3.05; fighter.character.add(label); fighter.label = label;
+    G.fighters.set(fighter.id, fighter);
   }
 }
-
-function updateHUD() {
-  $('score-player').textContent = scorePlayer; $('score-ai').textContent = scoreAI;
-  $('center-value').textContent = mode === 'solo' ? Math.max(0, Math.ceil(timeLeft)) : TARGET_SCORE;
-  const energy = Math.round(THREE.MathUtils.clamp(ballState.vel.length() / 15, 0, 1) * 100);
-  $('energy-fill').style.width = `${energy}%`; $('energy-value').textContent = `${energy}%`;
+function makeLabel(text, color) {
+  const canvasEl = document.createElement('canvas'); canvasEl.width = 256; canvasEl.height = 64;
+  const ctx = canvasEl.getContext('2d');
+  ctx.font = '900 30px Nunito, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fillRect(40, 10, 176, 44);
+  ctx.fillStyle = color; ctx.fillText(text, 128, 33);
+  const texture = new THREE.CanvasTexture(canvasEl); texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, opacity: .9 }));
+  sprite.scale.set(1.6, .4, 1);
+  return sprite;
 }
 
-function beginCountdown() {
-  phase='countdown';countdownTime=3;
-  $('countdown').style.display='flex';$('countdown-value').textContent='3';
-  tone(480,.12);
+// ------------------------------------------------------------ starting modes
+function startMode(mode, options = {}) {
+  G.mode = mode;
+  const difficulty = $('difficulty').value;
+  const humans = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? ['balam-striker', 'kuk-striker'] : ['balam-striker'];
+  G.localIds = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? [options.guest ? 'kuk-striker' : 'balam-striker'] : ['balam-striker'];
+  G.world = new World({ mode: mode === 'local2p' || mode === 'online' ? 'match' : mode, difficulty, seed: options.seed ?? (Date.now() & 0xffff), humans });
+  G.match = new Match(mode === 'local2p' || mode === 'online' ? 'match' : mode, G.world);
+  G.role = mode === 'online' ? (options.guest ? 'guest' : 'host') : 'local';
+  G.paused = false; G.timeScale = 1; G.slowmo = 0; G.excitement = 0;
+  G.guest.snapshots.length = 0;
+  rebuildFighters();
+  powerupVisuals.clear();
+  ballMesh.userData.history.length = 0;
+  for (const id of ['menu', 'endscreen', 'pause-screen', 'online', 'howto']) show(id, false);
+  for (const id of ['hud', 'status-strip', 'pause-btn']) $(id).classList.remove('hidden');
+  if (touch) $('touch-controls').classList.remove('hidden');
+  $('kuk-score').style.display = mode === 'ringhunt' || mode === 'practice' ? 'none' : '';
+  $('label-balam').textContent = mode === 'ringhunt' ? 'Score' : mode === 'practice' ? 'Rings' : G.role === 'guest' ? 'Balam (host)' : mode === 'local2p' ? 'Balam · P1' : 'Balam · You';
+  $('label-kuk').textContent = mode === 'local2p' ? "K'uk' · P2" : G.role === 'guest' ? "K'uk' · You" : G.role === 'host' ? "K'uk' (guest)" : "K'uk' · " + (TEAMS.kuk.glyph);
+  $('center-label').textContent = mode === 'practice' ? 'Practice' : 'Time';
+  $('sub-label').textContent = mode === 'match' ? `first to ${MODES.match.target}` : mode === 'ringhunt' ? 'lit ring only' : '';
+  $('combo').classList.toggle('hidden', mode !== 'ringhunt');
+  $('hint').classList.toggle('hidden', mode === 'practice');
+  $('tutorial').classList.toggle('hidden', mode !== 'practice');
+  $('hint').textContent = touch ? 'Stick: move · hold STRIKE to charge, release near the ball · LOB for rings · CHARGE to tackle' : 'WASD move · hold Space / click to charge, release near the ball · E lob for rings · Q tackle';
+  if (mode === 'practice') startTutorial();
+  G.match.countdown = 3;
+  show('countdown', true); $('countdown-value').textContent = '3';
+  audio.tone(480, .12);
+  cameraRig.stopCinematic();
+  canvas.focus();
+  updateHUD(true);
 }
+
+document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListener('click', () => {
+  audio.unlock();
+  const mode = button.dataset.mode;
+  if (mode === 'online') { show('menu', false); show('online', true); $('online-status').textContent = ''; return; }
+  startMode(mode);
+}));
+$('restart-btn').addEventListener('click', () => { if (G.role === 'guest') { showMenu(); return; } startMode(G.mode); if (G.role === 'host') sendStart(); });
+$('menu-btn').addEventListener('click', showMenu);
+$('quit-btn').addEventListener('click', showMenu);
+$('howto-btn').addEventListener('click', () => { show('menu', false); show('howto', true); });
+$('howto-close').addEventListener('click', () => { show('howto', false); if (!G.mode) show('menu', true); });
+$('quality').addEventListener('change', (event) => { localStorage.setItem('ssl-quality', event.target.value); location.reload(); });
+$('online-back').addEventListener('click', () => { closeNet(); show('online', false); show('menu', true); });
+
+// ------------------------------------------------------------ pause
 function togglePause(force) {
-  if(!['playing','countdown','goal'].includes(phase))return;
-  paused=typeof force==='boolean'?force:!paused;
-  clock.getDelta(); // Discard elapsed time while focus/visibility changes.
-  Input.resetInput();$('pause-screen').style.display=paused?'flex':'none';if(!paused)canvas.focus();
+  if (!G.mode || G.match?.phase === 'ended') return;
+  G.paused = typeof force === 'boolean' ? force : !G.paused;
+  clock.getDelta();
+  resetInput();
+  show('pause-screen', G.paused);
+  if (!G.paused) canvas.focus();
 }
-$('pause-btn').addEventListener('click',()=>togglePause());
-$('resume-btn').addEventListener('click',()=>togglePause(false));
-addEventListener('blur',()=>togglePause(true));
-document.addEventListener('visibilitychange',()=>{if(document.hidden)togglePause(true);});
+$('pause-btn').addEventListener('click', () => togglePause());
+$('resume-btn').addEventListener('click', () => togglePause(false));
+addEventListener('keydown', (event) => { if (event.code === 'Escape' || event.code === 'KeyP') togglePause(); });
+addEventListener('blur', () => { if (G.role === 'local') togglePause(true); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && G.role === 'local') togglePause(true); });
 
-function startGame(selectedMode) {
-  paused=false;$('pause-screen').style.display='none';$('pause-btn').classList.remove('hidden');$('hint').classList.remove('hidden');
-  canvas.focus(); mode = selectedMode; scorePlayer = 0; scoreAI = 0; timeLeft = SOLO_SECONDS;
-  $('menu').style.display = 'none'; $('endscreen').style.display = 'none';
-  $('hud').classList.remove('hidden'); $('energy').classList.remove('hidden');
-  if (matchMedia('(pointer: coarse)').matches) $('touch-controls').classList.remove('hidden');
-  $('rival-score').style.display = mode === 'solo' ? 'none' : '';
-  $('player-label').textContent = mode === 'solo' ? 'Rings' : 'Sun Team';
-  $('rival-label').textContent = 'Rival Team';
-  $('center-label').textContent = mode === 'solo' ? 'Time' : 'First to';
-  setAIVisibility(mode === 'versus');
-  updateHUD(); resetPositions(); beginCountdown();
+// ------------------------------------------------------------ tutorial (practice)
+function startTutorial() {
+  G.tutorial = { step: 0, strikes: 0, rings: 0, tackles: 0, moved: false };
+  practiceMarker.position.set(3.5, .05, -1); practiceMarker.visible = true;
+  renderTutorial();
 }
-
-document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListener('click', () => startGame(button.dataset.mode)));
-$('restart-btn').addEventListener('click', () => startGame(mode));
-$('menu-btn').addEventListener('click', () => {
-  phase = 'menu'; mode = null; Input.resetInput();
-  $('endscreen').style.display = 'none'; $('menu').style.display = 'flex';
-  $('hud').classList.add('hidden'); $('energy').classList.add('hidden'); $('touch-controls').classList.add('hidden');
-  setAIVisibility(true);
-});
-
-function applyHit(fromPosition, angle, ownerTeam) {
-  ballState.vel.copy(shotVelocity(ballState.pos,angle,ringWorldPos));
-  ballState.heldCooldown=.2;lastTouch=ownerTeam;
-  const sunTeam = ownerTeam === 'sun';
-  burst(ballState.pos, sunTeam ? 0xffb12b : 0xe6363e, 18); shake = .24;
-  tone(sunTeam ? 150 : 115, .18, 'sawtooth', .08);
-  callout(sunTeam ? 'KINETIC STRIKE!' : 'RIVAL STRIKE', sunTeam ? 'player' : 'ai');
+const TUTORIAL = [
+  { text: () => touch ? 'Move with the left stick. Reach the blue marker.' : 'Move with W A S D. Reach the blue marker.', done: (t) => t.moved },
+  { text: () => touch ? 'Walk into the ball to nudge it, then hold STRIKE and release near it.' : 'Walk into the ball to nudge it, then hold SPACE and release near it. Mouse aims.', done: (t) => t.strikes >= 1 },
+  { text: () => touch ? 'Face the ring and hold LOB. Release at about half charge to thread it.' : 'Face the ring and hold E (lob). Release at about half charge to thread it. 3 points!', done: (t) => t.rings >= 1 },
+  { text: () => touch ? 'Press CHARGE to shoulder-tackle. It knocks rivals down and steals the ball.' : 'Press Q to shoulder-charge. It knocks rivals down and steals the ball.', done: (t) => t.tackles >= 1 },
+  { text: () => 'Low balls that hit the far wall score 1. Letting the ball bounce twice on your side gives a point away. Score two more rings to finish!', done: (t) => t.rings >= 3 },
+];
+function renderTutorial() {
+  const t = G.tutorial; if (!t) return;
+  const step = TUTORIAL[Math.min(t.step, TUTORIAL.length - 1)];
+  $('tut-step').textContent = step.text();
+  $('tut-step').classList.remove('done');
+  $('tut-progress').textContent = `STEP ${Math.min(t.step + 1, TUTORIAL.length)} OF ${TUTORIAL.length}`;
 }
-
-function tryPlayerHit() {
-  if (paused || phase !== 'playing' || !playerChar || playerHitCooldown > 0 || ballState.heldCooldown > 0) return;
-  if (ballState.pos.distanceTo(playerChar.position.clone().setY(1.05)) > HIT_RANGE) { callout('GET CLOSER', 'muted'); tone(90,.08,'square',.025); return; }
-  currentAimAngle=Input.mouseAimAngle;playerChar.rotation.y=currentAimAngle;
-  applyHit(playerChar.position,currentAimAngle,'sun');playerHitCooldown=.45;playerSwingTimer=.45;
-}
-setupInput(canvas, camera, () => playerChar?.position, tryPlayerHit);
-$('hint').textContent=matchMedia('(pointer: coarse)').matches?'Left stick: move · Drag court: aim · Strike near ball':'WASD: move · Mouse: aim · Space: hip strike';
-
-function registerScore() {
-  if(phase!=='playing'||paused)return;
-  const playerScored = scoringTeam(mode, lastTouch) === 'sun';
-  if (playerScored) scorePlayer += 1; else scoreAI += 1;
-  updateHUD(); burst(ringWorldPos, 0xffd34e, 44);
-  tone(520,.18,'triangle',.09); setTimeout(() => tone(760,.34,'triangle',.07), 110);
-  callout(playerScored ? 'SUN RING!' : 'RIVAL SCORES', playerScored ? 'score' : 'rival');
-  phase = 'goal';
-  goalTime=.85;
-}
-
-function finishGame() {
-  Input.resetInput();$('pause-btn').classList.add('hidden');$('hint').classList.add('hidden');$('touch-controls').classList.add('hidden');
-  phase = 'ended'; $('endscreen').style.display = 'flex';
-  if (mode === 'solo') {
-    $('end-mode').textContent = 'SOLO TRIAL COMPLETE'; $('end-title').textContent = `${scorePlayer} RINGS`;
-    $('end-sub').textContent = scorePlayer ? 'Your name is carved into the sun-stone.' : 'The sacred ring awaits your return.';
-  } else {
-    const won = scorePlayer > scoreAI;
-    $('end-mode').textContent = 'THE MATCH IS DECIDED'; $('end-title').textContent = won ? 'TIKAL VICTORY' : 'RIVAL VICTORY';
-    $('end-sub').textContent = `${scorePlayer} — ${scoreAI}`;
+function tutorialTick(events) {
+  const t = G.tutorial; if (!t || G.match.phase !== 'playing') return;
+  const me = controlled();
+  if (!t.moved && me && me.pos.distanceTo(practiceMarker.position.clone().setY(0)) < 1.1) { t.moved = true; practiceMarker.visible = false; particles.burst(practiceMarker.position, 0x7fe9ff, 16, 3, 3); }
+  for (const e of events) { if (e.type === 'strike') t.strikes += 1; if (e.type === 'score' && e.kind === 'ring') t.rings += 1; if (e.type === 'tackle') t.tackles += 1; }
+  const step = TUTORIAL[t.step];
+  if (step && step.done(t)) {
+    $('tut-step').classList.add('done');
+    audio.tone(660, .15, 'triangle', .06); setTimeout(() => audio.tone(880, .2, 'triangle', .06), 90);
+    t.step += 1;
+    if (t.step >= TUTORIAL.length) { finishGame('practice'); return; }
+    setTimeout(renderTutorial, 500);
   }
 }
 
-function updatePlayer(dt) {
-  if (!playerChar || phase !== 'playing') return;
-  const { mx, mz, moving } = getMoveVector();
-  const previous=playerChar.position.clone();
-  if (moving) {
-    playerChar.position.x = THREE.MathUtils.clamp(playerChar.position.x + mx * PLAYER_SPEED * dt, -COURT_WIDTH / 2 + .75, COURT_WIDTH / 2 - .75);
-    playerChar.position.z = THREE.MathUtils.clamp(playerChar.position.z + mz * PLAYER_SPEED * dt, -COURT_LENGTH / 2 + 1, COURT_LENGTH / 2 - 1);
-    const target=Math.atan2(mx,mz),turn=Math.atan2(Math.sin(target-playerChar.rotation.y),Math.cos(target-playerChar.rotation.y));
-    if(playerSwingTimer<=0)playerChar.rotation.y+=turn*(1-Math.exp(-14*dt));
-  }
-  playerMoveSpeed=playerChar.position.distanceTo(previous)/dt;
-  playerHitCooldown = Math.max(0, playerHitCooldown - dt);
-}
-
-function updateAI(dt) {
-  if (mode !== 'versus' || phase !== 'playing') return;
-  const ballXZ = new THREE.Vector3(ballState.pos.x, 0, ballState.pos.z);
-  for (const fighter of aiFighters) {
-    if (!fighter.enabled) continue;
-    const character = fighter.character;
-    const previous = character.position.clone();
-    fighter.hitCooldown = Math.max(0, fighter.hitCooldown - dt);
-    const toBall = ballXZ.clone().sub(character.position);
-    const distance = toBall.length();
-    if (distance > HIT_RANGE * .82) {
-      toBall.copy(getAITarget(fighter, ballXZ, playerChar.position).sub(character.position));
-      if (toBall.lengthSq() > .01) {
-        toBall.normalize();
-        character.position.x = THREE.MathUtils.clamp(character.position.x + toBall.x * AI_SPEED * dt, -COURT_WIDTH / 2 + .75, COURT_WIDTH / 2 - .75);
-        character.position.z = THREE.MathUtils.clamp(character.position.z + toBall.z * AI_SPEED * dt, -COURT_LENGTH / 2 + 1, COURT_LENGTH / 2 - 1);
-        character.rotation.y = Math.atan2(toBall.x, toBall.z);
-      }
-    } else if (shouldAIAttemptHit(ballState.pos.distanceTo(character.position.clone().setY(1.05)), fighter.hitCooldown, ballState.heldCooldown, HIT_RANGE)) {
-      const angle = Math.atan2(ringWorldPos.x - character.position.x, -character.position.z) + (Math.random() - .5) * .24;
-      applyHit(character.position, angle, fighter.team);
-      fighter.hitCooldown = .8 + Math.random() * .45;
-      fighter.swingTimer = .45;
+// ------------------------------------------------------------ HUD
+let lastScore = { balam: -1, kuk: -1 };
+function updateHUD(force = false) {
+  const m = G.match; if (!m) return;
+  for (const team of ['balam', 'kuk']) {
+    if (force || m.score[team] !== lastScore[team]) {
+      $('score-' + team).textContent = m.score[team];
+      $('maya-' + team).innerHTML = mayaNumeralSVG(m.score[team], { size: 30, color: TEAMS[team].css });
+      if (!force) { $('score-' + team).classList.remove('bump'); void $('score-' + team).offsetWidth; $('score-' + team).classList.add('bump'); }
+      lastScore[team] = m.score[team];
     }
-    fighter.moveSpeed = dt > 0 ? character.position.distanceTo(previous) / dt : 0;
+  }
+  if (G.mode === 'practice') $('center-value').textContent = `${m.rings}/3`;
+  else $('center-value').textContent = m.suddenDeath ? 'S.D.' : formatTime(m.timeLeft);
+  $('timer-block').classList.toggle('urgent', m.timed && m.timeLeft <= 15 && m.phase === 'playing');
+  if (m.suddenDeath) $('sub-label').textContent = 'next point wins';
+  const me = controlled();
+  const charging = me && me.charge >= 0;
+  $('charge-wrap').classList.toggle('active', !!charging);
+  $('charge-fill').style.width = `${charging ? me.charge * 100 : 0}%`;
+  $('charge-fill').classList.toggle('full', charging && me.charge >= .99);
+  if (me) {
+    const chips = [];
+    if (me.wind > 0) chips.push(['WIND ' + Math.ceil(me.wind), POWERUPS.wind.color]);
+    if (me.jaguar) chips.push(['JAGUAR', POWERUPS.jaguar.color]);
+    if (G.world.ball.shields[me.team] > 0) chips.push(['SHIELD ' + Math.ceil(G.world.ball.shields[me.team]), POWERUPS.shield.color]);
+    if (G.world.moonTime > 0) chips.push(['MOON ' + Math.ceil(G.world.moonTime), POWERUPS.moon.color]);
+    $('effects').innerHTML = chips.map(([t, c]) => `<span class="effect-chip" style="--c:#${c.toString(16).padStart(6, '0')}">${t}</span>`).join('');
+  }
+  if (G.mode === 'ringhunt') $('combo').textContent = m.combo > 1 ? `COMBO ×${Math.min(m.combo, 4)}` : '';
+}
+
+// ------------------------------------------------------------ event presentation
+function wire(event) {
+  const out = { type: event.type };
+  for (const key of ['kind', 'power', 'big', 'side', 'points', 'combo', 'text', 'winner', 'team']) if (event[key] !== undefined) out[key] = event[key];
+  if (event.player) { out.player = event.player.id; out.team = event.team || event.player.team; }
+  if (event.victim) out.victim = event.victim.id;
+  if (event.pos) out.pos = [event.pos.x, event.pos.y, event.pos.z];
+  if (event.score) out.score = event.score;
+  if (event.ring) out.ringSide = event.ring.side;
+  if (event.powerup) out.powerup = event.powerup.id;
+  return out;
+}
+
+function present(events) {
+  const ball = G.world.ball;
+  for (const e of events) {
+    const pos = e.pos ? new THREE.Vector3(...e.pos) : ball.pos.clone();
+    const isMe = e.player && G.localIds.includes(e.player);
+    switch (e.type) {
+      case 'strike': {
+        const color = TEAMS[e.team].color;
+        particles.burst(pos, color, e.big ? 40 : 14 + Math.round(e.power * 12), e.big ? 9 : 5, 4.5);
+        cameraRig.impact(e.big ? .55 : .12 + e.power * .22);
+        audio.strike(e.kind, e.power, e.big);
+        if (e.big) { flash(); callout(pick(CALLOUTS.bigStrike), e.team); }
+        else if (e.power > .85 || e.kind === 'lob') callout(pick(e.kind === 'lob' ? CALLOUTS.lob : CALLOUTS.strike), e.team);
+        const f = G.fighters.get(e.player); if (f) f.lastStrike = G.elapsed;
+        break;
+      }
+      case 'whiff': if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
+      case 'tackle': audio.tackle(); if (e.player) particles.burst(G.world.byId(e.player).pos.clone().setY(.6), 0xffffff, 8, 3, 2); break;
+      case 'steal': callout('STEAL!', e.team); audio.hit(); particles.burst(pos, 0xffffff, 20, 6, 4); cameraRig.impact(.3); break;
+      case 'knockdown': audio.hit(); cameraRig.impact(.2); break;
+      case 'rim': audio.tone(820, .12, 'triangle', .05); particles.burst(pos, 0xffd34e, 8, 3, 3); break;
+      case 'wall': audio.tone(140, .1, 'square', .04); break;
+      case 'bounce': if (e.speed > 6) audio.tone(110, .07, 'sine', .05); break;
+      case 'shield': callout(pick(CALLOUTS.shield), 'muted'); audio.tone(520, .25, 'sine', .07); particles.burst(pos, 0xffe36b, 24, 6, 5); break;
+      case 'powerup': {
+        const def = POWERUPS[e.kind];
+        audio.powerup();
+        particles.burst(G.world.byId(e.player).pos.clone().setY(1), def.color, 24, 5, 5);
+        if (isMe || G.mode === 'local2p') callout(def.name.toUpperCase(), 'muted');
+        break;
+      }
+      case 'powerupSpawn': audio.tone(1040, .12, 'sine', .035); break;
+      case 'score': onScore(e); break;
+      case 'suddenDeath': callout(pick(CALLOUTS.suddenDeath), 'muted'); audio.drum(); break;
+      case 'callout': callout(e.text, e.kind || ''); break;
+      case 'play': show('countdown', false); audio.tone(720, .3, 'triangle', .08); break;
+      case 'resume': cameraRig.stopCinematic(); G.timeScale = 1; break;
+      case 'ended': finishGame(); break;
+      default: break;
+    }
   }
 }
 
-const desiredCamera = new THREE.Vector3(); const cameraTarget = new THREE.Vector3();
-const clock = new THREE.Clock(); let elapsed = 0;
-function updateCamera(dt) {
-  if (!playerChar) return;
-  cameraTarget.copy(playerChar.position).lerp(ballState.pos,.28);cameraTarget.y=1.5;
-  const portrait=innerHeight>innerWidth;
-  desiredCamera.set(playerChar.position.x*.4,portrait?8.8:6.8,Math.min(COURT_LENGTH/2-1,playerChar.position.z+(portrait?12:10)));
-  if (shake > 0) { desiredCamera.x += (Math.random()-.5)*shake; desiredCamera.y += (Math.random()-.5)*shake; shake = Math.max(0, shake-dt*1.8); }
-  camera.position.lerp(desiredCamera, 1 - Math.pow(.002, dt)); camera.lookAt(cameraTarget);
+function onScore(e) {
+  const team = e.team;
+  const big = e.kind === 'ring';
+  const ringSide = e.ringSide ?? (team === 'balam' ? 1 : -1);
+  const ringCenter = RINGS[ringSide > 0 ? 0 : 1].center;
+  const goal = goals.find((g) => g.side === ringSide);
+  if (big) {
+    flash();
+    particles.burst(ringCenter, 0xffd34e, 70, 9, 7);
+    particles.burst(ringCenter, TEAMS[team].color, 40, 7, 6);
+    cameraRig.impact(.45);
+    cameraRig.startCinematic(ringCenter, ringSide);
+    G.timeScale = .3; G.slowmo = 1.1;
+    goal.light.intensity = 40; goal.halo.material.opacity = 1;
+    audio.ring();
+    audio.crowd(1);
+    G.excitement = 1;
+    const label = G.mode === 'ringhunt' && e.combo > 1 ? `RING! COMBO ×${Math.min(e.combo, 4)}` : pick(CALLOUTS.ring);
+    callout(label, 'score');
+  } else {
+    audio.score(); audio.crowd(.5); G.excitement = .6;
+    particles.burst(G.world.ball.pos, TEAMS[team].color, 26, 6, 5);
+    cameraRig.impact(.2);
+    const text = e.kind === 'doubleBounce' ? pick(CALLOUTS.doubleBounce) : pick(CALLOUTS.backline);
+    callout(`${TEAMS[team].name.toUpperCase()}: ${text}`, team);
+  }
+  updateHUD();
+}
+
+// ------------------------------------------------------------ finishing
+function finishGame(reason) {
+  const m = G.match;
+  resetInput();
+  for (const id of ['pause-btn', 'hint', 'touch-controls', 'tutorial']) $(id).classList.add('hidden');
+  m.phase = 'ended';
+  show('endscreen', true);
+  cameraRig.stopCinematic();
+  G.timeScale = 1;
+  const stats = m.stats;
+  const statHTML = (items) => items.map(([label, value]) => `<div><b>${value}</b>${label}</div>`).join('');
+  if (G.mode === 'ringhunt') {
+    const best = Math.max(Number(localStorage.getItem('ssl-best-ringhunt') || 0), m.score.balam);
+    localStorage.setItem('ssl-best-ringhunt', best);
+    $('end-mode').textContent = 'RING HUNT COMPLETE'; $('end-title').textContent = `${m.score.balam} POINTS`;
+    $('end-sub').textContent = m.score.balam >= best && m.score.balam > 0 ? 'New best — your name is carved into the sun-stone.' : `Best: ${best}`;
+    $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['BEST COMBO', stats.longestCombo], ['STRIKES', stats.strikes]]);
+  } else if (G.mode === 'practice' || reason === 'practice') {
+    $('end-mode').textContent = 'PRACTICE COMPLETE'; $('end-title').textContent = 'READY FOR THE COURT';
+    $('end-sub').textContent = 'You know the moves. Take on a Ballcourt Match.';
+    $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['STRIKES', stats.strikes], ['TACKLES', stats.tackles]]);
+  } else {
+    const winner = m.winner || (m.score.balam > m.score.kuk ? 'balam' : 'kuk');
+    const myTeam = G.world.byId(controlledId())?.team;
+    const won = G.mode === 'local2p' ? null : winner === myTeam;
+    if (won) localStorage.setItem('ssl-wins', Number(localStorage.getItem('ssl-wins') || 0) + 1);
+    $('end-mode').textContent = 'THE MATCH IS DECIDED';
+    $('end-title').textContent = G.mode === 'local2p' ? `${TEAMS[winner].name.toUpperCase()} WINS` : won ? 'VICTORY' : 'DEFEAT';
+    $('end-sub').textContent = `Balam ${m.score.balam} — ${m.score.kuk} K'uk'`;
+    $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['STRIKES', stats.strikes], ['TACKLES', stats.tackles]]);
+  }
+  $('restart-btn').textContent = G.role === 'guest' ? 'Back to menu' : 'Play Again';
+  audio.drum();
+}
+
+// ------------------------------------------------------------ networking
+function closeNet() { if (G.net) { G.net.close(); G.net = null; } }
+$('host-btn').addEventListener('click', async () => {
+  audio.unlock(); closeNet();
+  const status = $('online-status');
+  status.innerHTML = 'Creating room…';
+  $('host-btn').disabled = true;
+  try {
+    G.net = new NetSession();
+    G.net.onClose = () => { if (G.mode === 'online') { callout('CONNECTION LOST', 'muted'); setTimeout(showMenu, 1500); } };
+    const waiting = G.net.host();
+    await new Promise((r) => setTimeout(r, 300));
+    status.innerHTML = `Share this code with your friend:<div class="code">${G.net.code}</div>Waiting for them to join…`;
+    await waiting;
+    status.innerHTML = 'Friend connected! Starting…';
+    G.net.onMessage = (data) => { if (data.t === 'in') G.guest.lastInput = data.i; };
+    setTimeout(() => { startMode('online', { seed: Date.now() & 0xffff }); sendStart(); }, 600);
+  } catch (error) { status.textContent = 'Could not create a room: ' + (error.message || error.type || 'unknown error'); closeNet(); }
+  $('host-btn').disabled = false;
+});
+$('join-btn').addEventListener('click', async () => {
+  audio.unlock(); closeNet();
+  const code = $('join-code').value.trim().toUpperCase();
+  const status = $('online-status');
+  if (code.length < 4) { status.textContent = 'Enter the 5-letter room code.'; return; }
+  status.textContent = 'Connecting…';
+  $('join-btn').disabled = true;
+  try {
+    G.net = new NetSession();
+    G.net.onClose = () => { if (G.mode === 'online') { callout('HOST LEFT', 'muted'); setTimeout(showMenu, 1500); } };
+    G.net.onMessage = onGuestMessage;
+    await G.net.join(code);
+    status.textContent = 'Connected! Waiting for the host to start…';
+  } catch (error) { status.textContent = 'Could not join: ' + (error.message || error.type || 'unknown error'); closeNet(); }
+  $('join-btn').disabled = false;
+});
+function sendStart() { G.net?.send({ t: 'start', seed: G.world.seed, difficulty: $('difficulty').value }); }
+function onGuestMessage(data) {
+  if (data.t === 'start') { startMode('online', { guest: true, seed: data.seed }); G.guest.snapshots.length = 0; return; }
+  if (data.t === 'st') {
+    G.guest.snapshots.push({ at: performance.now(), s: data.s, m: data.m });
+    if (G.guest.snapshots.length > 4) G.guest.snapshots.shift();
+    if (data.ev?.length) present(data.ev);
+    if (data.m.phase === 'ended' && G.match.phase !== 'ended') { G.match.applySnapshot(data.m); finishGame(); }
+  }
+}
+let netAccumulator = 0;
+function hostNetwork(dt, events) {
+  if (!G.net?.conn) return;
+  netAccumulator += dt;
+  const important = events.filter((e) => !['bounce', 'wall'].includes(e.type));
+  if (netAccumulator >= 1 / 20 || important.length) {
+    netAccumulator = 0;
+    G.net.send({ t: 'st', s: G.world.snapshot(), m: G.match.snapshot(), ev: important });
+  }
+  G.net.ping();
+}
+function guestNetwork() {
+  if (!G.net?.conn) return;
+  const input = readInput('p1', { facing: facingOf(controlledId()), touch, arrowsAsP1: true });
+  G.net.send({ t: 'in', i: input });
+  G.net.ping();
+  const snaps = G.guest.snapshots;
+  if (snaps.length >= 1) {
+    const latest = snaps[snaps.length - 1];
+    G.world.applySnapshot(latest.s);
+    const prev = snaps.length >= 2 ? snaps[snaps.length - 2] : null;
+    if (prev) {
+      // Interpolate ball and players between the two latest snapshots for smoothness.
+      const span = Math.max(1, latest.at - prev.at);
+      const t = THREE.MathUtils.clamp((performance.now() - latest.at) / span, 0, 1);
+      const b = G.world.ball;
+      b.pos.set(THREE.MathUtils.lerp(prev.s.ball[0], latest.s.ball[0], 1), THREE.MathUtils.lerp(prev.s.ball[1], latest.s.ball[1], 1), THREE.MathUtils.lerp(prev.s.ball[2], latest.s.ball[2], 1));
+      b.pos.addScaledVector(b.vel, t * span / 1000 * .5);
+    }
+    if (G.match.phase !== 'ended') { G.match.applySnapshot(latest.m); if (latest.m.phase === 'playing') show('countdown', false); else if (latest.m.phase === 'countdown') $('countdown-value').textContent = latest.m.countdown > .5 ? Math.ceil(latest.m.countdown) : 'PLAY'; }
+  }
+}
+
+// ------------------------------------------------------------ main loop
+setupInput(canvas, camera, () => controlled()?.pos);
+
+function collectInputs() {
+  const inputs = {};
+  if (G.mode === 'local2p') {
+    inputs['balam-striker'] = readInput('p1', { facing: 1, touch });
+    inputs['kuk-striker'] = readInput('p2', { facing: -1 });
+  } else if (G.role === 'host') {
+    inputs['balam-striker'] = readInput('p1', { facing: 1, touch, arrowsAsP1: true });
+    inputs['kuk-striker'] = G.guest.lastInput || EMPTY_INPUT;
+  } else {
+    inputs['balam-striker'] = readInput('p1', { facing: 1, touch, arrowsAsP1: true });
+  }
+  return inputs;
 }
 
 function tick() {
   requestAnimationFrame(tick);
-  const rawDelta=clock.getDelta();
-  const frameDt=Math.min(rawDelta,.1),dt=paused?0:frameDt,wallDt=paused?0:rawDelta;
-  elapsed+=dt;
-  if(phase==='countdown'&&!paused) {
-    countdownTime-=wallDt;
-    $('countdown-value').textContent=countdownTime>.5?Math.ceil(countdownTime):'PLAY';
-    if(countdownTime<=0){$('countdown').style.display='none';phase='playing';}
-  }
-  if(phase==='goal'&&!paused) {
-    goalTime-=wallDt;
-    if(goalTime<=0) {
-      if(mode==='versus'&&Math.max(scorePlayer,scoreAI)>=TARGET_SCORE)finishGame();
-      else{resetPositions();phase='playing';}
-    }
-  }
-  if(phase==='playing'&&!paused) {
-    if(mode==='solo'){timeLeft=Math.max(0,timeLeft-wallDt);if(timeLeft===0)finishGame();}
-    if(phase==='playing'){
-      updatePlayer(dt);updateAI(dt);
-      if(ballState.update(dt,ringWorldPos))registerScore();
-    }
-  }
-  ballMesh.position.copy(ballState.pos); updateBallVisual(ballMesh, ballState.vel, dt);
-  updateCourt(arena, elapsed); updateParticles(dt); updateHUD();
-  if (playerChar) {
-    currentAimAngle = Input.mouseAimAngle;
-    aimGroup.position.set(playerChar.position.x, .035, playerChar.position.z); aimGroup.rotation.y = currentAimAngle;
-    aimRing.material.opacity = .5 + Math.sin(elapsed * 5) * .18;
-  }
-  updateCamera(dt);
-  playerSwingTimer = Math.max(0, playerSwingTimer - dt);
-  animateCharacter(playerRig,phase==='playing'?playerMoveSpeed:0,playerSwingTimer,dt,elapsed);
-  for (const fighter of aiFighters) {
-    if (!fighter.character.visible || mode !== 'versus') continue;
-    fighter.swingTimer = Math.max(0, fighter.swingTimer - dt);
-    animateCharacter(fighter.rig,mode==='versus'&&phase==='playing'?fighter.moveSpeed:0,fighter.swingTimer,dt,elapsed);
+  const rawDelta = clock.getDelta();
+  const frameDt = Math.min(rawDelta, .1);
+  const running = G.mode && !G.paused;
+  if (G.slowmo > 0) { G.slowmo -= frameDt; if (G.slowmo <= 0) G.timeScale = 1; }
+  const dt = running ? frameDt * G.timeScale : 0;
+  G.elapsed += dt;
+  G.excitement = Math.max(0, G.excitement - frameDt * .35);
+
+  if (running && G.role !== 'guest') {
+    const m = G.match;
+    if (m.phase === 'countdown') $('countdown-value').textContent = m.countdown > .5 ? Math.ceil(m.countdown) : 'PLAY';
+    const worldEvents = m.phase === 'playing' ? G.world.step(dt, collectInputs()) : [];
+    const matchEvents = m.update(frameDt * (m.phase === 'goal' ? 1 : G.timeScale), worldEvents);
+    const events = [...worldEvents, ...matchEvents].map(wire);
+    present(events);
+    if (G.mode === 'practice') tutorialTick(events);
+    if (G.role === 'host') hostNetwork(frameDt, events);
+    updateHUD();
+  } else if (running && G.role === 'guest') {
+    guestNetwork();
+    updateHUD();
+  } else if (!G.mode && G.world) {
+    // Attract mode: AI plays itself behind the menu.
+    const events = G.world.step(frameDt, {});
+    for (const e of events) if (e.type === 'ring' || e.type === 'backline' || e.type === 'doubleBounce') G.world.resetPositions(0);
   }
 
-  renderer.render(scene, camera);
+  // ---- render sync
+  const world = G.world;
+  if (world) {
+    updateBallVisual(ballMesh, world.ball.pos, world.ball.vel, frameDt, world.ball.lastTouch ? TEAMS[world.ball.lastTouch].color : 0xff9b20);
+    powerupVisuals.sync(world.powerups, G.elapsed);
+    for (const player of world.players) {
+      const f = G.fighters.get(player.id); if (!f) continue;
+      f.character.position.set(player.pos.x, 0, player.pos.z);
+      f.character.rotation.y = player.facing;
+      animateCharacter(f.rig, player.speed, player.swingTimer, frameDt, G.elapsed, { stun: player.stun, dash: player.dash, charge: player.charge });
+      f.marker.material.opacity = G.localIds.includes(player.id) ? .5 : .22;
+      f.marker.material.color.setHex(player.wind > 0 ? POWERUPS.wind.color : player.jaguar ? POWERUPS.jaguar.color : TEAMS[player.team].color);
+      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice';
+    }
+    // Goals: lit ring, shields, halo decay
+    for (const goal of goals) {
+      const lit = G.mode === 'ringhunt' && world.litRing === (goal.side > 0 ? 'north' : 'south');
+      goal.halo.material.opacity = THREE.MathUtils.damp(goal.halo.material.opacity, lit ? .55 + Math.sin(G.elapsed * 6) * .25 : 0, lit ? 8 : 2.5, frameDt);
+      goal.light.intensity = THREE.MathUtils.damp(goal.light.intensity, lit ? 10 : 0, 3, frameDt);
+      goal.ringMat.emissiveIntensity = lit ? 1.4 : .5 + goal.light.intensity * .02;
+      const shield = world.ball.shields[goal.team];
+      goal.shield.material.opacity = THREE.MathUtils.damp(goal.shield.material.opacity, shield > 0 ? .18 + Math.sin(G.elapsed * 10) * .06 : 0, 8, frameDt);
+    }
+    const me = controlled();
+    if (me && G.mode) {
+      aimGroup.visible = true;
+      aimGroup.position.set(me.pos.x, .035, me.pos.z); aimGroup.rotation.y = me.aim;
+      const near = world.inRange(me);
+      aimRing.material.color.setHex(near ? 0x7fffc8 : 0xffd34e); aimArrow.material.color.setHex(near ? 0x7fffc8 : 0xffd34e);
+      aimRing.material.opacity = .45 + Math.sin(G.elapsed * 5) * .18 + (me.charge >= 0 ? me.charge * .3 : 0);
+      aimGroup.scale.setScalar(me.charge >= 0 ? 1 + me.charge * .35 : 1);
+    } else aimGroup.visible = false;
+    const camPlayer = me || world.players[0];
+    cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? TEAMS[me.team].attacks : 1, portrait: innerHeight > innerWidth, intro: !G.mode });
+  }
+  updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement);
+  particles.update(frameDt);
+  if (composer) composer.render(); else renderer.render(scene, camera);
 }
 tick();
+
+// Keep the start-of-match world so the attract camera has something to look at.
+G.world = new World({ mode: 'match', humans: [] });
+rebuildFighters();
