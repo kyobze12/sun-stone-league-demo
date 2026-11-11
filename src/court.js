@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { COURT_LENGTH, COURT_WIDTH, RING_HEIGHT, RING_RADIUS, RING_TUBE, RING_INSET, BACK_ZONE, TEAMS } from './config.js';
 
 export { COURT_LENGTH, COURT_WIDTH, RING_HEIGHT, RING_RADIUS, RING_TUBE };
@@ -96,11 +98,89 @@ export async function loadEnvironment(renderer, scene, manager) {
   pmrem.compileEquirectangularShader();
   const envMap = pmrem.fromEquirectangular(texture).texture;
   scene.environment = envMap;
-  scene.background = texture;
-  scene.backgroundIntensity = .85;
   scene.environmentIntensity = .62;
+  // The sky photograph is NOT used as the backdrop: it is a real field, and
+  // from a high camera its electricity pylons sit on the horizon of a Maya
+  // ballcourt. Its light is what we want, so it stays as the environment map
+  // while a painted dusk dome provides everything the player actually sees.
+  scene.background = null;
+  addSkyDome(scene);
+  texture.dispose();
   pmrem.dispose();
   return envMap;
+}
+
+/** Painted dusk sky: a gradient dome, a low sun and the evening star. */
+function addSkyDome(scene) {
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 20), new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      topColor: { value: new THREE.Color(0x15224a) },
+      horizonColor: { value: new THREE.Color(0xe08347) },
+      groundColor: { value: new THREE.Color(0x4a2f1c) },
+      sunDir: { value: new THREE.Vector3(-26, 20, -22).normalize() },
+    },
+    vertexShader: 'varying vec3 vPos; void main(){ vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+    fragmentShader: `
+      varying vec3 vPos; uniform vec3 topColor; uniform vec3 horizonColor; uniform vec3 groundColor; uniform vec3 sunDir;
+      void main(){
+        vec3 d = normalize(vPos);
+        // A tight horizon band: spread over the whole upper hemisphere the
+        // gradient reads as one flat orange wash at eye level.
+        vec3 sky = d.y > 0.0
+          ? mix(horizonColor, topColor, pow(smoothstep(0.0, 0.34, d.y), 0.7))
+          : mix(horizonColor, groundColor, smoothstep(0.0, -0.18, d.y));
+        // Soft cloud banding, enough to keep the dome from looking painted flat.
+        float band = sin(d.y * 26.0 + d.x * 2.2) * sin(d.y * 11.0 - d.z * 1.7);
+        sky += vec3(1.0, 0.72, 0.45) * smoothstep(0.35, 1.0, band) * 0.10 * smoothstep(0.42, 0.04, abs(d.y));
+        // Warm glow around the sun, and the disc itself just above the horizon.
+        float toSun = max(dot(d, sunDir), 0.0);
+        sky += vec3(1.0, 0.55, 0.18) * pow(toSun, 7.0) * 0.55;
+        sky += vec3(1.0, 0.86, 0.6) * smoothstep(0.9975, 0.9992, toSun);
+        gl_FragColor = vec4(sky, 1.0);
+      }`,
+  }));
+  sky.frustumCulled = false;
+  sky.renderOrder = -1;
+  scene.add(sky);
+}
+
+// ---------------------------------------------------------------- the idol
+// A colossal figure of the Master Architect crowns each temple, looking down
+// the alley at the players. He is a bust, so he is set into the temple's
+// upper platform from the chest down — which is how such a figure would be
+// mounted anyway.
+let IDOL = null;
+
+export async function loadIdol(manager, url = './assets/props/idol.glb') {
+  const gltf = await new GLTFLoader(manager).loadAsync(url);
+  IDOL = gltf;
+  return gltf;
+}
+
+function addIdol(group, sign, { animate = true, shadows = false } = {}) {
+  if (!IDOL) return null;
+  const model = cloneSkinned(IDOL.scene);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const scale = 7.2 / Math.max(size.y, .001);
+  model.scale.setScalar(scale);
+  // Re-measure after scaling so he sits on the platform rather than through it.
+  const scaled = new THREE.Box3().setFromObject(model);
+  model.position.set(0, 7.3 - scaled.min.y - 1.1, sign * (COURT_LENGTH / 2 + 4.4));
+  model.rotation.y = sign > 0 ? Math.PI : 0;   // always facing down the court
+  if (shadows) model.traverse((o) => { if (o.isMesh || o.isSkinnedMesh) o.castShadow = true; });
+  group.add(model);
+  let mixer = null;
+  if (animate && IDOL.animations.length) {
+    mixer = new THREE.AnimationMixer(model);
+    const action = mixer.clipAction(IDOL.animations[0]);
+    action.timeScale = .55;                     // a slow, monumental sway
+    action.time = sign > 0 ? 0 : 3.1;           // offset so the pair are not in lockstep
+    action.play();
+  }
+  return mixer;
 }
 
 // ---------------------------------------------------------------- court markings
@@ -289,7 +369,7 @@ function addGoal(group, side, mats) {
 }
 
 // ---------------------------------------------------------------- assembly
-export function createCourt(scene) {
+export function createCourt(scene, idolOptions = {}) {
   const group = new THREE.Group();
   group.name = 'SunStoneArena';
   scene.add(group);
@@ -314,14 +394,24 @@ export function createCourt(scene) {
   const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400), stoneMaterial({ repeat: [90, 90], color: 0x7d6a4c, bumpScale: .02 }));
   ground.rotation.x = -Math.PI / 2; ground.position.y = -.26; ground.receiveShadow = true; group.add(ground);
 
+  // The idol is optional scenery: if the model failed to load, or placing it
+  // throws, the temples simply stand bare rather than the whole court failing.
+  let idolMixers = [];
+  try {
+    idolMixers = [addIdol(group, 1, idolOptions), addIdol(group, -1, idolOptions)].filter(Boolean);
+  } catch (error) {
+    console.warn('[sun-stone-league] could not place the temple idol:', error);
+  }
+
   const crowd = addCrowd(group);
   [[-6.4, -12.5], [-6.4, 12.5], [6.4, -12.5], [6.4, 12.5], [-6.4, 0], [6.4, 0]].forEach(([x, z]) => addTorch(group, x, z));
 
   const goals = [addGoal(group, 1, mats), addGoal(group, -1, mats)];
-  return { arena: group, goals, crowd };
+  return { arena: group, goals, crowd, idolMixers };
 }
 
-export function updateCourt(arena, time, crowd, excitement = 0) {
+export function updateCourt(arena, time, crowd, excitement = 0, idolMixers = null, dt = 0) {
+  if (idolMixers && dt > 0) for (const mixer of idolMixers) mixer.update(dt);
   arena.traverse((object) => {
     if (object.userData.flame) {
       const pulse = 1 + Math.sin(time * 11 + object.position.x) * .13;

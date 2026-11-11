@@ -9,9 +9,14 @@ code at build time or at runtime.
 | File | Source | Licence |
 | --- | --- | --- |
 | `public/assets/env/spruit_sunrise_1k.hdr` | [Poly Haven](https://polyhaven.com/a/spruit_sunrise), distributed via the [three.js](https://github.com/mrdoob/three.js) example assets | CC0 1.0 |
+| `public/assets/env/sky_equirect.webp` | tone-mapped from the above | CC0 1.0 |
 
-Used for image-based lighting and as the visible sky. It is what gives the
-stone its warm bounce light and the gold rings their reflections.
+Used for image-based **lighting only**. It is a photograph of a real field, and
+from a high camera its electricity pylons sit on the horizon of a Maya
+ballcourt — so the visible backdrop is a painted dusk dome drawn in a shader
+(`addSkyDome` in `src/court.js`) while the HDRI supplies the bounce light and
+the reflections on the gold rings. The WebP copy is a fallback for hosts that
+refuse to serve `.hdr`.
 
 ## Stone
 
@@ -49,6 +54,30 @@ absence and falls back to the procedural gait in `src/characters.js`.
 The two skins are baked by this project from the mesh's own geometry — see
 `tools/bake-costume.mjs`. The source mesh ships a 2×2 placeholder texture, so
 without them every fighter renders as a flat silhouette.
+
+## Monument
+
+| File | Source | Licence |
+| --- | --- | --- |
+| `public/assets/props/idol.glb` | "Zaculeu the Master Architect", supplied by the project owner | **unverified — see note** |
+
+A colossal bust that crowns each temple. It is a bust by construction — the
+skeleton has no hips, knees or hands, and the mesh carries `Body_Endcap` and
+`ArmCaps` — so it is scenery rather than a playable character, mounted from the
+chest down in the temple platform. Its own idle clip drives the hair, feathers
+and cloak.
+
+It was supplied as a file rather than fetched from a known source, and it
+carries a Sketchfab generator string but no licence metadata. **Its terms have
+not been verified.** Confirm them with the author before distributing this
+project, and replace or remove the file if they do not permit redistribution —
+`src/court.js` treats the idol as optional and the temples simply stand bare
+without it.
+
+Processed by `tools/optimize-idol.mjs`: three 4096x4096 PNG textures reduced to
+1024 WebP, mesh simplified, positions quantised, and `KHR_materials_unlit`
+removed so it takes the court's lighting instead of ignoring it — 32.4 MB down
+to 1.8 MB.
 
 ## Fonts
 

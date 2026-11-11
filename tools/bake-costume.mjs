@@ -9,7 +9,12 @@
 import fs from 'node:fs';
 import { PNG } from 'pngjs';
 
-const SRC = new URL('../public/assets/characters/player.glb', import.meta.url).pathname;
+// Run this against the ORIGINAL, unoptimised mesh. tools/optimize-character.mjs
+// quantises positions to normalised shorts, which this baker cannot read body
+// coordinates from. The pipeline order is: bake skins -> optimise mesh. The two
+// outputs are independent, and simplification leaves the UV islands in place,
+// so a texture baked from the source still fits the optimised mesh.
+const SRC = process.argv[2] || new URL('../public/assets/characters/player.glb', import.meta.url).pathname;
 const SIZE = 1024;
 
 const b = fs.readFileSync(SRC);
@@ -23,7 +28,9 @@ function accessor(index) {
   const start = (bv.byteOffset || 0) + (acc.byteOffset || 0);
   const comps = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[acc.type];
   const n = acc.count * comps;
-  const C = { 5126: Float32Array, 5123: Uint16Array, 5125: Uint32Array, 5121: Uint8Array }[acc.componentType];
+  const C = { 5126: Float32Array, 5125: Uint32Array, 5123: Uint16Array, 5122: Int16Array, 5121: Uint8Array, 5120: Int8Array }[acc.componentType];
+  if (!C) throw new Error('unsupported componentType ' + acc.componentType);
+  if (acc.normalized) throw new Error('this model is quantised — bake from the unoptimised source mesh instead');
   return { arr: new C(bin.buffer, bin.byteOffset + start, n), count: acc.count };
 }
 
@@ -61,16 +68,19 @@ function regionOf(v) {
 }
 
 // ------------------------------------------------------------------ palette
+// Drawn from the Master Architect idol that crowns each temple: oxidised jade
+// armour, aged gold, deep bronze skin, bone ornament. The two teams read as
+// the same culture in different regalia rather than as two colour swaps.
 const TEAMS = {
-  balam: {
-    pelt: [214, 152, 54], peltDark: [38, 24, 14], skin: [150, 92, 54],
-    cloth: [176, 70, 38], jade: [26, 122, 100], gold: [226, 176, 72],
-    feather: [240, 186, 72], paint: [30, 20, 14],
+  balam: {   // jaguar: gold pelt over jade
+    pelt: [198, 142, 58], peltDark: [44, 28, 16], skin: [134, 82, 48],
+    cloth: [61, 122, 106], jade: [45, 110, 96], gold: [198, 158, 82],
+    feather: [226, 176, 74], paint: [34, 22, 16], bone: [214, 199, 168],
   },
-  kuk: {
-    pelt: [34, 160, 136], peltDark: [16, 52, 48], skin: [150, 92, 54],
-    cloth: [176, 54, 62], jade: [222, 182, 78], gold: [232, 198, 110],
-    feather: [36, 190, 158], paint: [150, 40, 48],
+  kuk: {     // quetzal: jade plumage over gold
+    pelt: [46, 128, 112], peltDark: [16, 46, 44], skin: [134, 82, 48],
+    cloth: [150, 68, 52], jade: [196, 156, 80], gold: [214, 180, 104],
+    feather: [52, 158, 136], paint: [120, 42, 44], bone: [214, 199, 168],
   },
 };
 
@@ -151,7 +161,7 @@ function costume(P, x, y, z) {
   // ---- legs
   if (h > .34) return shade(peltColor(P, x, y, z), grain);          // loincloth
   if (h < .055) return shade(mix(P.cloth, P.peltDark, .5), grain);  // sandal
-  if (h < .105) return shade(P.gold, grain);                        // ankle wrap
+  if (h < .105) return shade(P.bone, grain);                        // bone ankle wrap
   return shade(P.skin, grain);
 }
 

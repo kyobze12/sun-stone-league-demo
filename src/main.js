@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { createCourt, loadStoneTextures, loadEnvironment, updateCourt, addLighting } from './court.js';
+import { createCourt, loadStoneTextures, loadEnvironment, loadIdol, updateCourt, addLighting } from './court.js';
 import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter } from './characters.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
 import { setupInput, readInput, resetInput, isTouch } from './input.js';
@@ -22,7 +22,7 @@ const canvas = $('game-canvas');
 const renderer = createRenderer(canvas, quality);
 const scene = new THREE.Scene();
 // Very light haze only — the HDRI supplies the sky and the distance cue.
-scene.fog = new THREE.FogExp2(0xc8a582, .0016);
+scene.fog = new THREE.FogExp2(0xe08347, .0022);  // matches the sky dome's horizon
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 420);
 camera.position.set(0, 7, -16);
 let composer = createComposer(renderer, scene, camera, quality);
@@ -47,12 +47,13 @@ manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Ma
 
 // The stone maps and the sky have to be in hand before the arena is built,
 // so the materials carry their textures from the first frame.
-let arena = null, goals = [], crowd = [];
+let arena = null, goals = [], crowd = [], idolMixers = [];
 let characterSource = null;
 (async () => {
   try { await loadStoneTextures(manager); } catch { $('loading-note').textContent = 'Stone textures unavailable — using flat stone'; }
   try { await loadEnvironment(renderer, scene, manager); } catch { scene.background = new THREE.Color(0x24405e); }
-  ({ arena, goals, crowd } = createCourt(scene));
+  try { await loadIdol(manager); } catch { /* the temples simply stand bare */ }
+  ({ arena, goals, crowd, idolMixers } = createCourt(scene, { animate: quality !== 'low', shadows: quality === 'high' }));
   if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
   const missing = [];
   try { await loadSkins(manager); } catch { missing.push('skins'); }
@@ -562,7 +563,7 @@ function tick() {
     const camPlayer = me || world.players[0];
     cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? TEAMS[me.team].attacks : 1, portrait: innerHeight > innerWidth, intro: !G.mode });
   }
-  if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement);
+  if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement, idolMixers, frameDt);
   particles.update(frameDt);
   if (composer) composer.render(); else renderer.render(scene, camera);
 }

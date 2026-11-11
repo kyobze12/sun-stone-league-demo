@@ -95,11 +95,13 @@ export function updateBallVisual(ball, pos, velocity, dt, tint = 0xff9b20) {
   const data = ball.userData;
   data.core.rotation.x += velocity.z * dt * 1.5;
   data.core.rotation.z -= velocity.x * dt * 1.5;
-  data.core.material.emissiveIntensity = .08 + energy * 1.5;
-  data.core.material.emissive.setHex(tint);
+  // The core keeps an ember glow of its own; the team tint rides on the halo
+  // and trail instead. Tinting the body turned the ball into a coloured orb.
+  data.core.material.emissiveIntensity = .05 + energy * .45;
   data.glow.material.color.setHex(tint);
-  data.glow.material.opacity = .10 + energy * .3;
-  data.glow.scale.setScalar(1.15 + energy * .75);
+  // Keep the halo a hint of heat, not a coloured disc swallowing the ball.
+  data.glow.material.opacity = .04 + energy * .2;
+  data.glow.scale.setScalar(.8 + energy * .6);
   data.light.color.setHex(tint);
   data.light.intensity = energy * 16;
   data.shadow.position.set(pos.x, .03, pos.z);
