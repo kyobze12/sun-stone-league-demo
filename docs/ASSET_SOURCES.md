@@ -79,6 +79,23 @@ Processed by `tools/optimize-idol.mjs`: three 4096x4096 PNG textures reduced to
 removed so it takes the court's lighting instead of ignoring it — 32.4 MB down
 to 1.8 MB.
 
+## Lens and atmosphere
+
+| File | Source | Licence |
+| --- | --- | --- |
+| `public/assets/fx/lensflare0.png` | `examples/textures/lensflare/`, three.js r163 | see note |
+| `public/assets/fx/lensflare3.png` | `examples/textures/lensflare/`, three.js r163 | see note |
+| `public/assets/fx/spark1.png` | `examples/textures/sprites/`, three.js r163 | see note |
+
+The sun flare and the dust motes hanging in the light (`src/cinematic.js`).
+Like the stone maps these come from the MIT-licensed three.js repository with
+no per-file notice, so their provenance is treated as unverified. All three are
+optional: if they fail to load the flare and dust are simply skipped.
+
+The colour grade is written as a shader rather than shipped as a LUT. The
+`.CUBE` / `.3dl` LUTs in the three.js examples carry RocketStock and Presetpro
+copyright headers with no stated licence, so none were included.
+
 ## Fonts
 
 Cinzel and Nunito are loaded at runtime from Google Fonts (SIL Open Font

@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { createGradePass } from './cinematic.js';
 import { BALL_RADIUS, POWERUPS, TEAMS, COURT_LENGTH } from './config.js';
 
 // ---------------------------------------------------------------- quality
@@ -44,7 +45,9 @@ export function createComposer(renderer, scene, camera, quality) {
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), q.bloomStrength, .55, .78);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
-  composer.userData = { bloom };
+  const grade = createGradePass();
+  composer.addPass(grade);
+  composer.userData = { bloom, grade };
   return composer;
 }
 
@@ -181,69 +184,127 @@ export class PowerupVisuals {
 }
 
 // ---------------------------------------------------------------- camera
+// Exponential smoothing that behaves the same at 20 fps on a phone and 120 fps
+// on a desktop: `rate` is how quickly the gap closes, per second.
+function follow(current, target, rate, dt) {
+  return current.lerp(target, 1 - Math.exp(-rate * dt));
+}
+
+/**
+ * Third-person follow camera in the style of an action-adventure game.
+ *
+ * It sits low behind your fighter, slightly over the shoulder, looking down the
+ * court toward the ring you attack. Every input is smoothed separately — your
+ * fighter quickly, the ball slowly and only in the horizontal plane — because
+ * the old rig chased the raw ball position, so every bounce jolted the frame.
+ * Shake is layered on afterwards as smooth noise rather than injected into the
+ * target, which is where the jitter came from.
+ */
 export class CameraRig {
   constructor(camera) {
     this.camera = camera;
-    this.desired = new THREE.Vector3(0, 7, -14);
-    this.target = new THREE.Vector3();
-    this.lookAt = new THREE.Vector3();
+    this.player = new THREE.Vector3();
+    this.ballBias = new THREE.Vector3();
+    this.position = camera.position.clone();
+    this.look = new THREE.Vector3();
+    this.desired = new THREE.Vector3();
+    this.lookTarget = new THREE.Vector3();
     this.shake = 0;
     this.fovKick = 0;
-    this.baseFov = 52;
-    this.cinematic = null; // {center, time}
-    this.facing = 1;
+    this.time = 0;
+    this.cinematic = null;
+    this.primed = false;
+    this.reducedMotion = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
-  /**
-   * Broadcast-style follow camera behind the controlled player, looking down
-   * the court toward the ring they attack. Keeps the ball in frame.
-   */
-  update(dt, { playerPos, ballPos, facing = 1, portrait = false, intro = false, ring = null }) {
-    this.facing = facing;
+
+  /** Vertical FOV that keeps roughly the same horizontal view on any screen. */
+  fovFor(aspect) {
+    const horizontal = THREE.MathUtils.degToRad(aspect < 1 ? 74 : aspect > 1.9 ? 90 : 82);
+    const vertical = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(horizontal / 2) / aspect));
+    return THREE.MathUtils.clamp(vertical, 42, 74);
+  }
+
+  update(dt, { playerPos, ballPos, facing = 1, intro = false }) {
+    if (dt <= 0) return;
+    this.time += dt;
+    const aspect = this.camera.aspect;
+    const portrait = aspect < 1;
+    const short = aspect > 1.9;   // landscape phone: wide, very little height
+
     if (this.cinematic) {
-      this.cinematic.time += dt;
-      const t = this.cinematic.time;
-      const c = this.cinematic.center;
-      const angle = t * .9 + this.cinematic.offset;
-      this.desired.set(c.x + Math.sin(angle) * 6.5, c.y + 1.4 + Math.sin(t * 1.3) * .4, c.z + Math.cos(angle) * 6.5 * -this.cinematic.side);
-      this.lookAt.lerp(c, 1 - Math.pow(.001, dt));
+      // Slow orbit around the ring after a goal.
+      const c = this.cinematic;
+      c.time += dt;
+      const angle = c.offset + c.time * .55;
+      this.desired.set(c.center.x + Math.sin(angle) * 6.2, c.center.y + .6 + Math.sin(c.time * .9) * .3, c.center.z - c.side * (3.2 + Math.cos(angle) * 2.4));
+      this.lookTarget.copy(c.center);
+      follow(this.position, this.desired, 2.2, dt);
+      follow(this.look, this.lookTarget, 4, dt);
     } else if (intro) {
-      const t = performance.now() / 1000;
-      this.desired.set(Math.sin(t * .18) * 15, 9 + Math.sin(t * .11) * 2, Math.cos(t * .18) * 20);
-      this.lookAt.lerp(new THREE.Vector3(0, 2.5, 0), 1 - Math.pow(.001, dt));
+      const t = this.time;
+      this.desired.set(Math.sin(t * .12) * 13, 7.5 + Math.sin(t * .09) * 1.5, Math.cos(t * .12) * 17);
+      this.lookTarget.set(0, 3, 0);
+      follow(this.position, this.desired, 1.2, dt);
+      follow(this.look, this.lookTarget, 2, dt);
     } else {
-      // Broadcast follow camera: sits behind the player's own end, high enough to
-      // clear the stone walls, framing the player and the ball together.
-      const anchor = playerPos.clone().lerp(ballPos, .35);
-      const limit = COURT_LENGTH / 2 - 3.6;   // never reach the goal structure
-      // Portrait is tall and narrow, so it takes a steeper, closer camera: a
-      // landscape framing puts the player behind the on-screen thumb controls.
-      const distance = portrait ? 10 : 11;
-      const rawZ = anchor.z - facing * distance;
-      const z = THREE.MathUtils.clamp(rawZ, -limit, limit);
-      // When the shot would push the camera through the end wall, trade distance
-      // for height. The goal frame stands 7.8 high at |z|=14.4, so the camera
-      // also climbs over it as it nears an end line — otherwise it ends up
-      // inside the stone lintel with a jade block filling the lens.
-      const squeeze = Math.abs(rawZ - z);
-      const height = (portrait ? 8.6 : 6.8) + squeeze * .34;
-      this.desired.set(THREE.MathUtils.clamp(anchor.x * .5, -5, 5), height, z);
-      // Look past the anchor toward the ring being attacked, so the target is
-      // always in frame — the framing a sports broadcast uses.
-      const look = anchor.clone();
-      look.z += facing * (portrait ? 3.5 : 4.5);
-      look.y = (portrait ? 2.2 : 2.7) + squeeze * .1;
-      this.lookAt.lerp(look, 1 - Math.pow(.0006, dt));
+      if (!this.primed) { this.player.copy(playerPos); this.primed = true; }
+      follow(this.player, playerPos, 9, dt);
+      // Ball pull: horizontal only, capped, and slow — framing should drift
+      // toward the play, never twitch with each bounce.
+      const pull = ballPos.clone().sub(this.player).setY(0);
+      if (pull.length() > 5) pull.setLength(5);
+      follow(this.ballBias, pull, 2.4, dt);
+
+      const distance = portrait ? 8.6 : short ? 7 : 7.4;
+      const height = portrait ? 5.4 : short ? 4.1 : 3.9;
+      const shoulder = portrait ? 0 : .75 * facing;     // over the right shoulder
+      const anchor = this.player.clone().addScaledVector(this.ballBias, .25);
+
+      // Keep the lens inside the alley and clear of the goal frames. Near the
+      // end wall the camera climbs above the ring and the wall top instead of
+      // pressing in behind your fighter — continuous, so there is no jump.
+      // Depth comes from your fighter alone; the ball only shifts sideways and
+      // steers the aim, otherwise a ball ahead drags the lens onto your back.
+      const limit = COURT_LENGTH / 2 - 2.2;
+      const rawZ = this.player.z - facing * distance;
+      const over = Math.max(0, Math.abs(rawZ) - limit);
+      const z = Math.sign(rawZ) * Math.min(Math.abs(rawZ), limit);
+      const nearEnd = THREE.MathUtils.smoothstep(Math.abs(z), limit - 3, limit);
+      this.desired.set(
+        THREE.MathUtils.clamp(anchor.x * .7 - shoulder, -5.2, 5.2),
+        height + nearEnd * 1.6 + over * .9,
+        z,
+      );
+
+      // Look a little ahead of your fighter, toward the ring and the ball.
+      this.lookTarget.copy(anchor).addScaledVector(this.ballBias, short ? .15 : .35);
+      this.lookTarget.z += facing * (portrait ? 3.5 : short ? 2.5 : 5);
+      // Aim lower on short screens so your fighter's feet stay above the controls.
+      this.lookTarget.y = (short ? .6 : 1.5) - over * .15;
+      follow(this.position, this.desired, 5.5, dt);
+      follow(this.look, this.lookTarget, 7, dt);
     }
-    if (this.shake > 0) { this.desired.x += (Math.random() - .5) * this.shake; this.desired.y += (Math.random() - .5) * this.shake; this.shake = Math.max(0, this.shake - dt * 2.2); }
-    this.camera.position.lerp(this.desired, 1 - Math.pow(this.cinematic ? .02 : .003, dt));
-    this.camera.lookAt(this.lookAt);
-    this.fovKick = THREE.MathUtils.damp(this.fovKick, 0, 6, dt);
-    const fov = this.baseFov + this.fovKick;
+
+    this.camera.position.copy(this.position);
+    // Smooth, low-frequency shake applied after smoothing, so it never feeds back.
+    if (this.shake > 0 && !this.reducedMotion) {
+      const t = this.time * 38;
+      this.camera.position.x += (Math.sin(t) + Math.sin(t * 1.7) * .5) * this.shake * .28;
+      this.camera.position.y += (Math.sin(t * 1.3 + 1) + Math.sin(t * 2.3) * .5) * this.shake * .22;
+    }
+    this.shake = Math.max(0, this.shake - dt * 2.4);
+    this.camera.lookAt(this.look);
+
+    this.fovKick = THREE.MathUtils.damp(this.fovKick, 0, 5, dt);
+    const fov = this.fovFor(aspect) + (this.reducedMotion ? 0 : this.fovKick);
     if (Math.abs(this.camera.fov - fov) > .05) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
   }
-  startCinematic(center, side) { this.cinematic = { center: center.clone(), time: 0, side, offset: Math.random() * 6.28 }; }
+
+  startCinematic(center, side) { this.cinematic = { center: center.clone(), time: 0, side, offset: (Math.random() - .5) * 1.2 }; }
   stopCinematic() { this.cinematic = null; }
-  impact(amount) { this.shake = Math.max(this.shake, amount); this.fovKick = Math.max(this.fovKick, amount * 12); }
+  /** Called when a new match starts so the camera does not sweep in from the menu orbit. */
+  snap() { this.primed = false; }
+  impact(amount) { this.shake = Math.max(this.shake, amount); this.fovKick = Math.max(this.fovKick, amount * 8); }
 }
 
 export function teamCss(team) { return TEAMS[team].css; }

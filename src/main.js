@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { addCinematics } from './cinematic.js';
 import { createCourt, loadStoneTextures, loadEnvironment, loadIdol, updateCourt, addLighting } from './court.js';
 import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter } from './characters.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
@@ -22,7 +23,7 @@ const canvas = $('game-canvas');
 const renderer = createRenderer(canvas, quality);
 const scene = new THREE.Scene();
 // Very light haze only — the HDRI supplies the sky and the distance cue.
-scene.fog = new THREE.FogExp2(0xe08347, .0022);  // matches the sky dome's horizon
+scene.fog = new THREE.FogExp2(0xe08347, .0085);  // matches the sky dome's horizon
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 420);
 camera.position.set(0, 7, -16);
 let composer = createComposer(renderer, scene, camera, quality);
@@ -33,6 +34,7 @@ addEventListener('resize', () => {
   renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY[quality].pixelRatio));
   renderer.setSize(innerWidth, innerHeight);
   composer?.setSize(innerWidth, innerHeight);
+  if (composer?.userData.grade) composer.userData.grade.uniforms.aspect.value = innerWidth / innerHeight;
 });
 
 const lights = addLighting(scene);
@@ -48,6 +50,7 @@ manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Ma
 // The stone maps and the sky have to be in hand before the arena is built,
 // so the materials carry their textures from the first frame.
 let arena = null, goals = [], crowd = [], idolMixers = [];
+let cinematics = null;
 let characterSource = null;
 (async () => {
   try { await loadStoneTextures(manager); } catch { $('loading-note').textContent = 'Stone textures unavailable — using flat stone'; }
@@ -55,6 +58,7 @@ let characterSource = null;
   try { await loadIdol(manager); } catch { /* the temples simply stand bare */ }
   ({ arena, goals, crowd, idolMixers } = createCourt(scene, { animate: quality !== 'low', shadows: quality === 'high' }));
   if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
+  cinematics = await addCinematics(scene, lights, quality, manager).catch(() => null);
   const missing = [];
   try { await loadSkins(manager); } catch { missing.push('skins'); }
   try { await loadAnimations(manager); } catch { missing.push('animations'); }
@@ -145,7 +149,7 @@ function makeLabel(text, color) {
   ctx.fillStyle = color; ctx.fillText(text, 128, 33);
   const texture = new THREE.CanvasTexture(canvasEl); texture.colorSpace = THREE.SRGBColorSpace;
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false, opacity: .9 }));
-  sprite.scale.set(1.6, .4, 1);
+  sprite.scale.set(1.3, .32, 1);
   return sprite;
 }
 
@@ -176,11 +180,16 @@ function startMode(mode, options = {}) {
   $('hint').classList.toggle('hidden', mode === 'practice');
   $('tutorial').classList.toggle('hidden', mode !== 'practice');
   $('hint').textContent = touch ? 'Stick: move · hold STRIKE to charge, release near the ball · LOB for rings · CHARGE to tackle' : 'WASD move · hold Space / click to charge, release near the ball · E lob for rings · Q tackle';
+  // The control reminder fades once you have had time to read it.
+  $('hint').classList.remove('faded');
+  clearTimeout(G.hintTimer);
+  G.hintTimer = setTimeout(() => $('hint').classList.add('faded'), 9000);
   if (mode === 'practice') startTutorial();
   G.match.countdown = 3;
   show('countdown', true); $('countdown-value').textContent = '3';
   audio.tone(480, .12);
   cameraRig.stopCinematic();
+  cameraRig.snap();
   canvas.focus();
   updateHUD(true);
 }
@@ -540,7 +549,11 @@ function tick() {
       animateCharacter(f.rig, player.speed, player.swingTimer, frameDt, G.elapsed, { stun: player.stun, dash: player.dash, charge: player.charge });
       f.marker.material.opacity = G.localIds.includes(player.id) ? .5 : .22;
       f.marker.material.color.setHex(player.wind > 0 ? POWERUPS.wind.color : player.jaguar ? POWERUPS.jaguar.color : TEAMS[player.team].color);
-      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice';
+      // Role tags only on fighters out in the court: one standing by the lens
+      // would fill the screen, and your own needs no tag.
+      const camDist = camera.position.distanceTo(f.character.position);
+      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice' && !G.localIds.includes(player.id) && camDist > 9;
+      f.label.material.opacity = Math.min(.85, (camDist - 9) / 4);
     }
     // Goals: lit ring, shields, halo decay
     for (const goal of goals) {
@@ -561,10 +574,13 @@ function tick() {
       aimGroup.scale.setScalar(me.charge >= 0 ? 1 + me.charge * .35 : 1);
     } else aimGroup.visible = false;
     const camPlayer = me || world.players[0];
-    cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? TEAMS[me.team].attacks : 1, portrait: innerHeight > innerWidth, intro: !G.mode });
+    cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? TEAMS[me.team].attacks : 1, intro: !G.mode });
   }
   if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement, idolMixers, frameDt);
   particles.update(frameDt);
+  const now = performance.now() / 1000;
+  cinematics?.update(frameDt, now);
+  if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = now % 100;
   if (composer) composer.render(); else renderer.render(scene, camera);
 }
 tick();
