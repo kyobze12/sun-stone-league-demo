@@ -137,11 +137,17 @@ export function setupInput(canvas, camera, getPlayerPos) {
   for (const [id, key] of [['strike-btn', 'strike'], ['lob-btn', 'lob'], ['tackle-btn', 'tackle']]) {
     const button = document.getElementById(id);
     if (!button) continue;
-    const down = (event) => { event.preventDefault(); touchButtons[key] = true; button.classList.add('held'); };
+    // Capture the pointer so a thumb that drifts a few pixels off the button
+    // while charging does not fire a half-charged strike.
+    const down = (event) => {
+      event.preventDefault();
+      try { button.setPointerCapture(event.pointerId); } catch { /* old WebKit */ }
+      touchButtons[key] = true; button.classList.add('held');
+    };
     const up = () => { touchButtons[key] = false; button.classList.remove('held'); };
     button.addEventListener('pointerdown', down);
     button.addEventListener('pointerup', up);
     button.addEventListener('pointercancel', up);
-    button.addEventListener('pointerleave', up);
+    button.addEventListener('lostpointercapture', up);
   }
 }

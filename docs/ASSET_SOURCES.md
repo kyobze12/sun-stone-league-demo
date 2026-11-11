@@ -20,19 +20,17 @@ refuse to serve `.hdr`.
 
 ## Stone
 
-| File | Derived from | Licence |
-| --- | --- | --- |
-| `public/assets/stone/stone_albedo.webp` | `brick_diffuse.jpg`, three.js example textures | see note |
-| `public/assets/stone/stone_bump.webp` | `brick_bump.jpg`, three.js example textures | see note |
-| `public/assets/stone/stone_roughness.webp` | `brick_roughness.jpg`, three.js example textures | see note |
+No files. The masonry albedo, bump and roughness maps are generated at load
+time by `src/stonegen.js`: irregular courses of dressed limestone blocks with
+chipped arrises, mottling and remnant stucco, sized for the court. This
+replaced the brick textures previously borrowed from the three.js examples,
+whose provenance could not be verified.
 
-The albedo is not the original image: it is desaturated, level-adjusted and
-re-tinted to weathered limestone so it reads as Maya cut masonry rather than
-modern red brick. The bump and roughness maps are the original photographic
-surface data, converted to greyscale WebP. The three.js repository is MIT
-licensed; these particular texture files carry no separate licence notice in
-that repository, so treat their provenance as unverified and replace them if
-the project is ever distributed commercially.
+## Ruins and city
+
+No files. The colonnades, stelae, rubble, ceiba trees, jungle skyline and
+distant pyramids are built in code (`src/ruins.js`), the stela glyph panels
+drawn on a canvas.
 
 ## Characters
 

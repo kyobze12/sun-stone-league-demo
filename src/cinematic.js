@@ -110,7 +110,7 @@ class Dust {
 export async function addCinematics(scene, lights, quality, manager) {
   // Cool rim light from opposite the sun: separates the fighters from the
   // stone behind them, the single biggest step toward a "hero" read.
-  const rim = new THREE.DirectionalLight(0x9fc4ff, quality === 'low' ? .55 : .75);
+  const rim = new THREE.DirectionalLight(0x9fc4ff, .9);
   rim.position.copy(lights.sun.position).multiplyScalar(-1).setY(9);
   scene.add(rim);
 

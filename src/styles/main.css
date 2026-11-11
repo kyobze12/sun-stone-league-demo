@@ -132,6 +132,7 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 #callout.kuk { color: #9df2dd; }
 #callout.muted { font-size: clamp(16px, 3vw, 24px); color: #e8d8bb; opacity: .9; }
 #callout.score { font-size: clamp(36px, 8vw, 72px); }
+#callout.explain { font-size: clamp(18px, 3.4vw, 34px); white-space: normal; width: min(86vw, 760px); }
 
 /* ---------------- touch ---------------- */
 #touch-controls { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
@@ -144,6 +145,14 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 #lob-btn { grid-column: 1; grid-row: 2; background: linear-gradient(180deg, #2fc5a9, #137561); color: #042a22; }
 #tackle-btn { grid-column: 1; grid-row: 1; }
 .touch-btn.held { transform: translateY(4px); box-shadow: 0 1px 0 #1a0d07; filter: brightness(1.2); }
+/* STRIKE glows when the ball is in reach, and fills from the bottom as you
+   hold it — the power meter lives under your thumb, not across the screen. */
+#strike-btn { --charge: 0; position: relative; overflow: hidden; transition: box-shadow .15s, filter .15s; }
+#strike-btn::before { content: ''; position: absolute; inset: 0; background: linear-gradient(0deg, rgba(255,250,220,.55), rgba(255,250,220,.15)); transform-origin: bottom; transform: scaleY(var(--charge)); pointer-events: none; }
+#strike-btn.ready { box-shadow: 0 0 0 3px #7fffc8, 0 0 22px 6px rgba(127,255,200,.55), 0 5px 0 #6b3008; }
+#strike-btn.ready:not(.held) { animation: strike-ready .7s ease-in-out infinite alternate; }
+@keyframes strike-ready { to { filter: brightness(1.18); } }
+@media (prefers-reduced-motion: reduce) { #strike-btn.ready:not(.held) { animation: none; } }
 
 #pause-btn { position: absolute; top: calc(8px + var(--safe-top)); right: calc(10px + var(--safe-right)); z-index: 26; width: 44px; height: 44px; padding: 0; min-height: 0; border-radius: 50%; font-size: 18px; background: rgba(20,11,6,.85); color: var(--gold); box-shadow: 0 3px 0 #130903; }
 
@@ -178,17 +187,20 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
   .touch-btn.small { width: 64px; height: 64px; }
   /* In-match HUD: a slim broadcast bar instead of three tall cards, so the
      fighters keep the middle of a 390px-tall screen. */
-  #hud { top: calc(4px + var(--safe-top)); gap: 6px; }
+  /* Scores tuck into the top-left corner so the top-centre — where the
+     far ring sits — stays clear. */
+  #hud { top: calc(4px + var(--safe-top)); left: calc(10px + var(--safe-left, 0px)); transform: none; gap: 6px; }
   .score-block, #timer-block { padding: 2px 10px; min-width: 0; border-radius: 8px; display: flex; align-items: center; gap: 8px; }
   #timer-block { min-width: 0; }
   .score-label { font-size: 9px; letter-spacing: .14em; white-space: nowrap; }
   .score-value { font-size: 20px; line-height: 1.15; }
   .score-row { gap: 0; }
   .maya-num, #sub-label { display: none; }
-  #hint { top: auto; bottom: calc(8px + var(--safe-bottom)); font-size: 11px; padding: 4px 12px; max-width: 46vw; white-space: normal; text-align: center; }
-  #tutorial { top: calc(40px + var(--safe-top)); }
+  #hint { top: calc(40px + var(--safe-top)); bottom: auto; font-size: 11px; padding: 4px 12px; max-width: 46vw; white-space: normal; text-align: center; }
+  #tutorial { top: calc(40px + var(--safe-top)); left: auto; right: calc(60px + var(--safe-right, 0px)); transform: none; max-width: 42vw; }
   .tut-step { font-size: 14px; padding: 6px 12px; }
   #status-strip { bottom: calc(10px + var(--safe-bottom)); }
+  #charge-wrap { display: none; } /* the STRIKE button shows power instead */
   .charge-track { width: min(30vw, 180px); }
   #pause-btn { width: 38px; height: 38px; font-size: 15px; top: calc(4px + var(--safe-top)); }
 }

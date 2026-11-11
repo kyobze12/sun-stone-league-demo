@@ -4,7 +4,7 @@
 
 export const COURT_LENGTH = 32;   // z axis (goal to goal)
 export const COURT_WIDTH = 14;    // x axis
-export const WALL_HEIGHT = 6;
+export const WALL_HEIGHT = 5.4;   // low flanks, as at Copán — keeps the skyline in view from the play camera
 
 export const RING_HEIGHT = 4.1;
 export const RING_RADIUS = 1.12;

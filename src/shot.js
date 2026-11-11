@@ -40,7 +40,7 @@ export function strikeVelocity({ position, angle, power, kind, ring, assist = 0,
   const distance = toward.length();
   const dot = aim.dot(toward.normalize());
   // A lob is the deliberate ring attempt, so it gets a wider assist cone.
-  const cone = Math.cos(THREE.MathUtils.degToRad(kind === 'lob' ? 34 : 16));
+  const cone = Math.cos(THREE.MathUtils.degToRad(kind === 'lob' ? 40 : 16));
   if (assist > 0 && distance > 2.5 && distance < 19 && dot > cone) {
     const solution = ringSolution(position, ring, gravityScale);
     const closeness = THREE.MathUtils.smoothstep(dot, cone, 1);

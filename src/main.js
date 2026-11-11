@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { addCinematics } from './cinematic.js';
+import { addRuins } from './ruins.js';
 import { createCourt, loadStoneTextures, loadEnvironment, loadIdol, updateCourt, addLighting } from './court.js';
 import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter } from './characters.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
@@ -23,7 +24,7 @@ const canvas = $('game-canvas');
 const renderer = createRenderer(canvas, quality);
 const scene = new THREE.Scene();
 // Very light haze only — the HDRI supplies the sky and the distance cue.
-scene.fog = new THREE.FogExp2(0xe08347, .0085);  // matches the sky dome's horizon
+scene.fog = new THREE.FogExp2(0xe6c79c, .0065);  // matches the sky dome's horizon
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 420);
 camera.position.set(0, 7, -16);
 let composer = createComposer(renderer, scene, camera, quality);
@@ -51,6 +52,7 @@ manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Ma
 // so the materials carry their textures from the first frame.
 let arena = null, goals = [], crowd = [], idolMixers = [];
 let cinematics = null;
+const strikeBtn = document.getElementById('strike-btn');
 let characterSource = null;
 (async () => {
   try { await loadStoneTextures(manager); } catch { $('loading-note').textContent = 'Stone textures unavailable — using flat stone'; }
@@ -58,6 +60,7 @@ let characterSource = null;
   try { await loadIdol(manager); } catch { /* the temples simply stand bare */ }
   ({ arena, goals, crowd, idolMixers } = createCourt(scene, { animate: quality !== 'low', shadows: quality === 'high' }));
   if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
+  try { addRuins(scene, quality); } catch (error) { console.warn('[sun-stone-league] ruins skipped:', error); }
   cinematics = await addCinematics(scene, lights, quality, manager).catch(() => null);
   const missing = [];
   try { await loadSkins(manager); } catch { missing.push('skins'); }
@@ -97,14 +100,19 @@ const clock = new THREE.Clock();
 
 function controlledId() { return G.localIds[0]; }
 function controlled() { return G.world?.byId(controlledId()); }
-function facingOf(id) { const p = G.world?.byId(id); return p ? TEAMS[p.team].attacks : 1; }
+// In Ring Hunt the lit ring alternates ends, so "forward" follows it; every
+// other mode faces the ring your team attacks.
+function facingOf(id) {
+  if (G.mode === 'ringhunt' && G.world) return G.world.litRing === 'north' ? 1 : -1;
+  const p = G.world?.byId(id); return p ? TEAMS[p.team].attacks : 1;
+}
 
 // ------------------------------------------------------------ UI helpers
 function show(id, on = true) { $(id).style.display = on ? 'flex' : 'none'; }
 function callout(text, kind = '') {
   const element = $('callout'); element.textContent = text; element.className = kind;
   element.classList.remove('show'); requestAnimationFrame(() => element.classList.add('show'));
-  clearTimeout(callout.timer); callout.timer = setTimeout(() => element.classList.remove('show'), kind === 'score' ? 1800 : 1100);
+  clearTimeout(callout.timer); callout.timer = setTimeout(() => element.classList.remove('show'), kind === 'score' || text.length > 22 ? 1900 : 1100);
 }
 function flash() { const f = $('flash'); f.classList.add('on'); requestAnimationFrame(() => setTimeout(() => f.classList.remove('on'), 60)); }
 function formatTime(seconds) { const m = Math.floor(seconds / 60), s = Math.ceil(seconds % 60); return s === 60 ? `${m + 1}:00` : `${m}:${String(s).padStart(2, '0')}`; }
@@ -160,6 +168,7 @@ function startMode(mode, options = {}) {
   const humans = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? ['balam-striker', 'kuk-striker'] : ['balam-striker'];
   G.localIds = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? [options.guest ? 'kuk-striker' : 'balam-striker'] : ['balam-striker'];
   G.world = new World({ mode: mode === 'local2p' || mode === 'online' ? 'match' : mode, difficulty, seed: options.seed ?? (Date.now() & 0xffff), humans });
+  G.world.humanAssistFloor = touch && mode !== 'online' ? .72 : 0;
   G.match = new Match(mode === 'local2p' || mode === 'online' ? 'match' : mode, G.world);
   G.role = mode === 'online' ? (options.guest ? 'guest' : 'host') : 'local';
   G.paused = false; G.timeScale = 1; G.slowmo = 0; G.excitement = 0;
@@ -172,14 +181,14 @@ function startMode(mode, options = {}) {
   $('rotate-hint').style.display = 'none';
   if (touch) $('touch-controls').classList.remove('hidden');
   $('kuk-score').style.display = mode === 'ringhunt' || mode === 'practice' ? 'none' : '';
-  $('label-balam').textContent = mode === 'ringhunt' ? 'Score' : mode === 'practice' ? 'Rings' : G.role === 'guest' ? 'Balam (host)' : mode === 'local2p' ? 'Balam · P1' : 'Balam · You';
-  $('label-kuk').textContent = mode === 'local2p' ? "K'uk' · P2" : G.role === 'guest' ? "K'uk' · You" : G.role === 'host' ? "K'uk' (guest)" : "K'uk' · " + (TEAMS.kuk.glyph);
+  $('label-balam').textContent = mode === 'ringhunt' ? 'Score' : mode === 'practice' ? 'Rings' : G.role === 'guest' ? 'Host' : mode === 'local2p' ? 'P1' : 'You';
+  $('label-kuk').textContent = mode === 'local2p' ? 'P2' : G.role === 'guest' ? 'You' : G.role === 'host' ? 'Guest' : 'Rivals';
   $('center-label').textContent = mode === 'practice' ? 'Practice' : 'Time';
   $('sub-label').textContent = mode === 'match' ? `first to ${MODES.match.target}` : mode === 'ringhunt' ? 'lit ring only' : '';
   $('combo').classList.toggle('hidden', mode !== 'ringhunt');
   $('hint').classList.toggle('hidden', mode === 'practice');
   $('tutorial').classList.toggle('hidden', mode !== 'practice');
-  $('hint').textContent = touch ? 'Stick: move · hold STRIKE to charge, release near the ball · LOB for rings · CHARGE to tackle' : 'WASD move · hold Space / click to charge, release near the ball · E lob for rings · Q tackle';
+  $('hint').textContent = touch ? 'Stick: move · hold STRIKE to power up, release when it glows · LOB for rings · TACKLE to steal' : 'WASD move · hold Space / click to charge, release near the ball · E lob for rings · Q tackle';
   // The control reminder fades once you have had time to read it.
   $('hint').classList.remove('faded');
   clearTimeout(G.hintTimer);
@@ -233,7 +242,7 @@ const TUTORIAL = [
   { text: () => touch ? 'Move with the left stick. Reach the blue marker.' : 'Move with W A S D. Reach the blue marker.', done: (t) => t.moved },
   { text: () => touch ? 'Walk into the ball to nudge it, then hold STRIKE and release near it.' : 'Walk into the ball to nudge it, then hold SPACE and release near it. Mouse aims.', done: (t) => t.strikes >= 1 },
   { text: () => touch ? 'Face the ring and hold LOB. Release at about half charge to thread it.' : 'Face the ring and hold E (lob). Release at about half charge to thread it. 3 points!', done: (t) => t.rings >= 1 },
-  { text: () => touch ? 'Press CHARGE to shoulder-tackle. It knocks rivals down and steals the ball.' : 'Press Q to shoulder-charge. It knocks rivals down and steals the ball.', done: (t) => t.tackles >= 1 },
+  { text: () => touch ? 'Press TACKLE to shoulder-charge. It knocks rivals down and steals the ball.' : 'Press Q to shoulder-charge. It knocks rivals down and steals the ball.', done: (t) => t.tackles >= 1 },
   { text: () => 'Low balls that hit the far wall score 1. Letting the ball bounce twice on your side gives a point away. Score two more rings to finish!', done: (t) => t.rings >= 3 },
 ];
 function renderTutorial() {
@@ -317,6 +326,7 @@ function present(events) {
         if (e.big) { flash(); callout(pick(CALLOUTS.bigStrike), e.team); }
         else if (e.power > .85 || e.kind === 'lob') callout(pick(e.kind === 'lob' ? CALLOUTS.lob : CALLOUTS.strike), e.team);
         const f = G.fighters.get(e.player); if (f) f.lastStrike = G.elapsed;
+        if (isMe || e.big) G.hitstop = e.big ? .12 : .035 + e.power * .06;
         break;
       }
       case 'whiff': if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4 && (!G.tutorial || G.tutorial.step >= 1)) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
@@ -369,8 +379,15 @@ function onScore(e) {
     audio.score(); audio.crowd(.5); G.excitement = .6;
     particles.burst(G.world.ball.pos, TEAMS[team].color, 26, 6, 5);
     cameraRig.impact(.2);
-    const text = e.kind === 'doubleBounce' ? pick(CALLOUTS.doubleBounce) : pick(CALLOUTS.backline);
-    callout(`${TEAMS[team].name.toUpperCase()}: ${text}`, team);
+    // Say why the point was given: the rules were the main thing players
+    // found hard to follow.
+    const me = controlled();
+    const mine = me ? me.team === team : team === 'balam';
+    const who = !me && G.mode !== 'local2p' ? TEAMS[team].name.toUpperCase() : mine || G.mode === 'local2p' ? `+1 ${TEAMS[team].name.toUpperCase()}` : '+1 RIVALS';
+    const why = e.kind === 'doubleBounce'
+      ? (mine ? 'it bounced twice on their side' : 'it bounced twice on your side')
+      : (mine ? 'it reached their back zone' : 'it reached your back zone');
+    callout(G.mode === 'local2p' ? `${who} — ${e.kind === 'doubleBounce' ? 'double bounce' : 'back zone'}` : `${who} — ${why}`, `${team} explain`);
   }
   updateHUD();
 }
@@ -514,7 +531,9 @@ function tick() {
   const frameDt = Math.min(rawDelta, .1);
   const running = G.mode && !G.paused;
   if (G.slowmo > 0) { G.slowmo -= frameDt; if (G.slowmo <= 0) G.timeScale = 1; }
-  const dt = running ? frameDt * G.timeScale : 0;
+  // Hit-stop: a few frames of frozen time on a strike sell its weight.
+  const frozen = G.hitstop > 0; if (frozen) G.hitstop -= frameDt;
+  const dt = running && !frozen ? frameDt * G.timeScale : 0;
   G.elapsed += dt;
   G.excitement = Math.max(0, G.excitement - frameDt * .35);
 
@@ -552,7 +571,8 @@ function tick() {
       // Role tags only on fighters out in the court: one standing by the lens
       // would fill the screen, and your own needs no tag.
       const camDist = camera.position.distanceTo(f.character.position);
-      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice' && !G.localIds.includes(player.id) && camDist > 9;
+      const me0 = G.world.byId(controlledId());
+      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice' && !G.localIds.includes(player.id) && camDist > 9 && !(me0 && player.team === me0.team && G.mode === 'match');
       f.label.material.opacity = Math.min(.85, (camDist - 9) / 4);
     }
     // Goals: lit ring, shields, halo decay
@@ -569,12 +589,14 @@ function tick() {
       aimGroup.visible = true;
       aimGroup.position.set(me.pos.x, .035, me.pos.z); aimGroup.rotation.y = me.aim;
       const near = world.inRange(me);
+      strikeBtn.classList.toggle('ready', near);
+      strikeBtn.style.setProperty('--charge', me.charge >= 0 ? me.charge.toFixed(2) : 0);
       aimRing.material.color.setHex(near ? 0x7fffc8 : 0xffd34e); aimArrow.material.color.setHex(near ? 0x7fffc8 : 0xffd34e);
       aimRing.material.opacity = .45 + Math.sin(G.elapsed * 5) * .18 + (me.charge >= 0 ? me.charge * .3 : 0);
       aimGroup.scale.setScalar(me.charge >= 0 ? 1 + me.charge * .35 : 1);
     } else aimGroup.visible = false;
     const camPlayer = me || world.players[0];
-    cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? TEAMS[me.team].attacks : 1, intro: !G.mode });
+    cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? facingOf(me.id) : 1, intro: !G.mode });
   }
   if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement, idolMixers, frameDt);
   particles.update(frameDt);

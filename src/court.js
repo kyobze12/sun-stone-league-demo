@@ -1,11 +1,11 @@
 import * as THREE from 'three';
+import { generateStoneMaps } from './stonegen.js';
 import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
-import { COURT_LENGTH, COURT_WIDTH, RING_HEIGHT, RING_RADIUS, RING_TUBE, RING_INSET, BACK_ZONE, TEAMS } from './config.js';
+import { WALL_HEIGHT, COURT_LENGTH, COURT_WIDTH, RING_HEIGHT, RING_RADIUS, RING_TUBE, RING_INSET, BACK_ZONE, TEAMS } from './config.js';
 
-export { COURT_LENGTH, COURT_WIDTH, RING_HEIGHT, RING_RADIUS, RING_TUBE };
-export const WALL_HEIGHT = 7.5;
+export { WALL_HEIGHT, COURT_LENGTH, COURT_WIDTH, RING_HEIGHT, RING_RADIUS, RING_TUBE };
 
 // Cross-section of one side of the ballcourt, in metres from the centre line.
 // A Maya court is a flat alley flanked by a sloping bench (talud), a vertical
@@ -28,19 +28,12 @@ const palette = {
 // ---------------------------------------------------------------- materials
 let MAPS = null;
 
-export async function loadStoneTextures(manager) {
-  const loader = new THREE.TextureLoader(manager);
-  const [albedo, bump, roughness] = await Promise.all([
-    loader.loadAsync('./assets/stone/stone_albedo.webp'),
-    loader.loadAsync('./assets/stone/stone_bump.webp'),
-    loader.loadAsync('./assets/stone/stone_roughness.webp'),
-  ]);
-  albedo.colorSpace = THREE.SRGBColorSpace;
-  for (const texture of [albedo, bump, roughness]) {
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.anisotropy = 4;
-  }
-  MAPS = { albedo, bump, roughness };
+/**
+ * Builds the masonry maps procedurally (see src/stonegen.js). Kept async and
+ * named as before so callers do not change; nothing is downloaded.
+ */
+export async function loadStoneTextures() {
+  MAPS = generateStoneMaps(1024);
   return MAPS;
 }
 
@@ -49,7 +42,9 @@ export function stoneMaterial({ repeat = [1, 1], color = palette.stone, bumpScal
   if (!MAPS) return new THREE.MeshStandardMaterial({ color, roughness, metalness: 0 });
   const clone = (texture) => { const t = texture.clone(); t.needsUpdate = true; t.repeat.set(repeat[0], repeat[1]); return t; };
   return new THREE.MeshStandardMaterial({
-    color,
+    // The baked albedo already carries the limestone colour, so the tint is
+    // pulled toward white — it only nudges warm/cool between surfaces.
+    color: new THREE.Color(color).lerp(new THREE.Color(0xffffff), .55),
     map: clone(MAPS.albedo),
     bumpMap: clone(MAPS.bump),
     bumpScale,
@@ -98,7 +93,7 @@ export async function loadEnvironment(renderer, scene, manager) {
   pmrem.compileEquirectangularShader();
   const envMap = pmrem.fromEquirectangular(texture).texture;
   scene.environment = envMap;
-  scene.environmentIntensity = .62;
+  scene.environmentIntensity = .45;
   // The sky photograph is NOT used as the backdrop: it is a real field, and
   // from a high camera its electricity pylons sit on the horizon of a Maya
   // ballcourt. Its light is what we want, so it stays as the environment map
@@ -110,15 +105,15 @@ export async function loadEnvironment(renderer, scene, manager) {
   return envMap;
 }
 
-/** Painted dusk sky: a gradient dome, a low sun and the evening star. */
+/** Painted late-afternoon sky: a gradient dome, haze band and the sun. */
 function addSkyDome(scene) {
   const sky = new THREE.Mesh(new THREE.SphereGeometry(300, 32, 20), new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
     uniforms: {
-      topColor: { value: new THREE.Color(0x15224a) },
-      horizonColor: { value: new THREE.Color(0xe08347) },
-      groundColor: { value: new THREE.Color(0x4a2f1c) },
+      topColor: { value: new THREE.Color(0x3d6fa8) },
+      horizonColor: { value: new THREE.Color(0xf0c48c) },
+      groundColor: { value: new THREE.Color(0x6b5236) },
       sunDir: { value: new THREE.Vector3(-26, 20, -22).normalize() },
     },
     vertexShader: 'varying vec3 vPos; void main(){ vPos = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
@@ -240,7 +235,7 @@ function flankGeometry(length) {
 function addFlank(group, sign, length) {
   // ExtrudeGeometry lays UVs out in world units, so the flank needs a far
   // higher repeat than a unit-UV box to keep the blocks at human scale.
-  const material = stoneMaterial({ repeat: [.42, .42], color: palette.stone, bumpScale: .07 });
+  const material = stoneMaterial({ repeat: [.31, .31], color: palette.stone, bumpScale: .07 });
   const mesh = new THREE.Mesh(flankGeometry(length), material);
   mesh.scale.x = sign;
   mesh.castShadow = true; mesh.receiveShadow = true;
@@ -297,17 +292,25 @@ function addEndWall(group, sign, mats) {
 }
 
 // ---------------------------------------------------------------- props
-function addTorch(group, x, z) {
-  const post = box(group, [.3, 1.5, .3], [x, .75, z], plain(0x3a2418, .85));
-  post.castShadow = true;
-  const bowl = new THREE.Mesh(new THREE.CylinderGeometry(.46, .26, .24, 12), plain(0x2e1c13, .7));
-  bowl.position.set(x, 1.55, z); bowl.castShadow = true; group.add(bowl);
-  const flame = new THREE.Mesh(new THREE.ConeGeometry(.2, .62, 10), new THREE.MeshBasicMaterial({ color: 0xffd089, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false }));
-  flame.position.set(x, 1.92, z); flame.userData.flame = true; group.add(flame);
-  const ember = new THREE.Mesh(new THREE.SphereGeometry(.26, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff7a1e, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }));
-  ember.position.set(x, 1.72, z); group.add(ember);
-  const light = new THREE.PointLight(0xff7b22, 11, 9, 2);
-  light.position.set(x, 2.0, z); group.add(light);
+// Stone incense braziers on the bench walk — out of the play volume, where
+// they used to stand in the alley as solid-looking posts the ball passed
+// through. Only some carry a real light: each point light is paid for by every
+// stone pixel on screen, which is the most expensive thing in the scene.
+function addTorch(group, x, y, z, withLight) {
+  const stone = plain(0x6e5a40, .9);
+  const plinth = box(group, [.7, .5, .7], [x, y + .25, z], stone);
+  plinth.castShadow = true;
+  const profile = [[0, 0], [.22, 0], [.28, .08], [.2, .22], [.36, .42], [.5, .62], [.46, .66], [0, .5]].map(([px, py]) => new THREE.Vector2(px, py));
+  const bowl = new THREE.Mesh(new THREE.LatheGeometry(profile, 14), stone);
+  bowl.position.set(x, y + .5, z); bowl.castShadow = true; group.add(bowl);
+  const flame = new THREE.Mesh(new THREE.ConeGeometry(.24, .8, 10), new THREE.MeshBasicMaterial({ color: 0xffd089, transparent: true, opacity: .75, blending: THREE.AdditiveBlending, depthWrite: false }));
+  flame.position.set(x, y + 1.45, z); flame.userData.flame = true; group.add(flame);
+  const ember = new THREE.Mesh(new THREE.SphereGeometry(.3, 10, 8), new THREE.MeshBasicMaterial({ color: 0xff7a1e, transparent: true, opacity: .5, blending: THREE.AdditiveBlending, depthWrite: false }));
+  ember.position.set(x, y + 1.2, z); group.add(ember);
+  if (withLight) {
+    const light = new THREE.PointLight(0xff7b22, 14, 10, 2);
+    light.position.set(x, y + 1.6, z); group.add(light);
+  }
 }
 
 // Spectators line the terrace walk above the upper wall.
@@ -379,7 +382,7 @@ export function createCourt(scene, idolOptions = {}) {
     warm: stoneMaterial({ repeat: [2.2, 2.2], color: palette.stoneWarm }),
   };
 
-  const floor = new THREE.Mesh(new THREE.BoxGeometry(COURT_WIDTH, .5, COURT_LENGTH), stoneMaterial({ repeat: [5, 11], color: 0xbda98a, bumpScale: .035, roughness: .9 }));
+  const floor = new THREE.Mesh(new THREE.BoxGeometry(COURT_WIDTH, .5, COURT_LENGTH), stoneMaterial({ repeat: [4.4, 10], color: 0xd2c0a0, bumpScale: .035, roughness: .9 }));
   floor.position.y = -.25; floor.receiveShadow = true; group.add(floor);
   addMarkings(group);
 
@@ -404,7 +407,11 @@ export function createCourt(scene, idolOptions = {}) {
   }
 
   const crowd = addCrowd(group);
-  [[-6.4, -12.5], [-6.4, 12.5], [6.4, -12.5], [6.4, 12.5], [-6.4, 0], [6.4, 0]].forEach(([x, z]) => addTorch(group, x, z));
+  const bench = (BENCH_OUT + WALL_OUT) / 2;
+  [[-1, -8], [1, -8], [-1, 8], [1, 8], [-1, 0], [1, 0]].forEach(([side, z]) =>
+    addTorch(group, side * bench, BENCH_TOP, z, idolOptions?.shadows ? z !== 0 : z === 0));
+  group.userData.flames = [];
+  group.traverse((object) => { if (object.userData.flame) group.userData.flames.push(object); });
 
   const goals = [addGoal(group, 1, mats), addGoal(group, -1, mats)];
   return { arena: group, goals, crowd, idolMixers };
@@ -412,13 +419,11 @@ export function createCourt(scene, idolOptions = {}) {
 
 export function updateCourt(arena, time, crowd, excitement = 0, idolMixers = null, dt = 0) {
   if (idolMixers && dt > 0) for (const mixer of idolMixers) mixer.update(dt);
-  arena.traverse((object) => {
-    if (object.userData.flame) {
-      const pulse = 1 + Math.sin(time * 11 + object.position.x) * .13;
-      object.scale.set(pulse, .9 + Math.sin(time * 8) * .16, pulse);
-      object.rotation.y = time * 2;
-    }
-  });
+  for (const object of arena.userData.flames || []) {
+    const pulse = 1 + Math.sin(time * 11 + object.position.x + object.position.z) * .13;
+    object.scale.set(pulse, .9 + Math.sin(time * 8 + object.position.z) * .16, pulse);
+    object.rotation.y = time * 2;
+  }
   if (!crowd) return;
   const dummy = new THREE.Object3D();
   for (const mesh of crowd) {
@@ -436,7 +441,10 @@ export function updateCourt(arena, time, crowd, excitement = 0, idolMixers = nul
 
 export function addLighting(scene) {
   // The HDRI does most of the work; these shape it and cast the shadows.
-  const sun = new THREE.DirectionalLight(0xffc27a, 1.9);
+  // Key: warm late sun. Fill: a sky/earth hemisphere so shadows go cool blue
+  // and the undersides pick up warm bounce — the warm/cool split the old
+  // same-hue directional fill could not give.
+  const sun = new THREE.DirectionalLight(0xffd29a, 2.5);
   sun.position.set(-26, 20, -22);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -446,7 +454,7 @@ export function addLighting(scene) {
   sun.shadow.bias = -.0004;
   sun.shadow.normalBias = .035;
   scene.add(sun);
-  const fill = new THREE.DirectionalLight(0xffd9b0, .35);
-  fill.position.set(8, 11, -16); scene.add(fill);
+  const fill = new THREE.HemisphereLight(0x8fb4d8, 0x6b4a2e, .5);
+  scene.add(fill);
   return { sun, fill };
 }

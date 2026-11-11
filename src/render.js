@@ -4,7 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { createGradePass } from './cinematic.js';
-import { BALL_RADIUS, POWERUPS, TEAMS, COURT_LENGTH } from './config.js';
+import { BALL_RADIUS, POWERUPS, TEAMS, COURT_LENGTH, HIT_MAX_HEIGHT } from './config.js';
 
 // ---------------------------------------------------------------- quality
 export function detectQuality() {
@@ -80,13 +80,19 @@ export function createBall(scene) {
   // Shadow blob so the ball's height reads on every device
   const shadow = new THREE.Mesh(new THREE.CircleGeometry(BALL_RADIUS * 1.1, 20), new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: .35, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2; scene.add(shadow);
+  // Height cues: a ring around the shadow that turns mint while the ball is
+  // low enough to strike, and a faint plumb line when it is high.
+  const marker = new THREE.Mesh(new THREE.RingGeometry(BALL_RADIUS * 1.15, BALL_RADIUS * 1.32, 28), new THREE.MeshBasicMaterial({ color: 0xffd34e, transparent: true, opacity: .5, depthWrite: false }));
+  marker.rotation.x = -Math.PI / 2; scene.add(marker);
+  const drop = new THREE.Mesh(new THREE.CylinderGeometry(.018, .018, 1, 4, 1, true), new THREE.MeshBasicMaterial({ color: 0xfff1c8, transparent: true, opacity: .28, depthWrite: false }));
+  scene.add(drop);
 
   const trailPositions = new Float32Array(30 * 3);
   const trailGeometry = new THREE.BufferGeometry();
   trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
   const trail = new THREE.Line(trailGeometry, new THREE.LineBasicMaterial({ color: 0xffb12e, transparent: true, opacity: .62, blending: THREE.AdditiveBlending }));
   trail.frustumCulled = false; scene.add(trail);
-  group.userData = { core, glow, light, trail, trailPositions, history: [], shadow };
+  group.userData = { core, glow, light, trail, trailPositions, history: [], shadow, marker, drop };
   scene.add(group);
   return group;
 }
@@ -106,10 +112,16 @@ export function updateBallVisual(ball, pos, velocity, dt, tint = 0xff9b20) {
   data.glow.material.opacity = .04 + energy * .2;
   data.glow.scale.setScalar(.8 + energy * .6);
   data.light.color.setHex(tint);
-  data.light.intensity = energy * 16;
+  data.light.intensity = energy * 7;
   data.shadow.position.set(pos.x, .03, pos.z);
   data.shadow.scale.setScalar(THREE.MathUtils.clamp(1.3 - pos.y * .08, .5, 1.3));
-  data.shadow.material.opacity = THREE.MathUtils.clamp(.4 - pos.y * .03, .08, .4);
+  data.shadow.material.opacity = THREE.MathUtils.clamp(.45 - pos.y * .03, .2, .45);
+  const strikeable = pos.y <= HIT_MAX_HEIGHT;
+  data.marker.position.set(pos.x, .04, pos.z);
+  data.marker.material.color.setHex(strikeable ? 0x7fffc8 : 0xffd34e);
+  data.marker.material.opacity = strikeable ? .7 : .4;
+  data.drop.visible = pos.y > 1.6;
+  if (data.drop.visible) { data.drop.position.set(pos.x, (pos.y - BALL_RADIUS) / 2, pos.z); data.drop.scale.y = Math.max(.01, pos.y - BALL_RADIUS); }
   const history = data.history;
   if (speed > 4) history.unshift(pos.clone()); else history.unshift(null);
   if (history.length > 30) history.pop();

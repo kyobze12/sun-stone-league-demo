@@ -297,7 +297,8 @@ export class World {
     if (!ok) { events.push({ type: 'whiff', player }); return false; }
     const ball = this.ball;
     const profile = player.ai ? player.ai.profile : DIFFICULTY[this.difficulty];
-    const assist = player.ai ? profile.aiAssist : profile.assist;
+    // Touch players aim with the stick alone, so they get a floor of help.
+    const assist = player.ai ? profile.aiAssist : Math.max(profile.assist, this.humanAssistFloor || 0);
     const angle = player.aim;
     const boost = player.jaguar ? 1.5 : 1;
     const velocity = strikeVelocity({ position: ball.pos, angle, power: .45 + .55 * power, kind, ring: this.targetRing(player), assist, boost, gravityScale: ball.gravityScale });
