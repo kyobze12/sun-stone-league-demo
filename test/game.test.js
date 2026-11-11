@@ -280,6 +280,15 @@ async function characterSource() {
   return (await new GLTFLoader().parseAsync(JSON.stringify(json), '')).scene;
 }
 
+test('the roster offers distinct fighters and your pick goes on your fighter', async () => {
+  const { ROSTER } = await import('../src/roster.js');
+  assert.ok(ROSTER.length >= 6);
+  assert.equal(new Set(ROSTER.map((r) => r.id)).size, ROSTER.length);
+  const world = new World({ mode: 'match', humans: ['balam-striker'] });
+  const { fighters } = spawnRoster(new THREE.Scene(), await characterSource(), world.players, { 'balam-striker': 'kame' });
+  assert.ok(fighters[0].rig.headgear, 'picked fighter has its headdress');
+});
+
 test('every fighter is spawned, scaled alike and animates independently', async () => {
   const world = new World({ mode: 'match', humans: ['balam-striker'] });
   const { fighters } = spawnRoster(new THREE.Scene(), await characterSource(), world.players);
@@ -289,9 +298,15 @@ test('every fighter is spawned, scaled alike and animates independently', async 
   assert.equal(fighters.filter((f) => f.team === 'balam').length, 2);
   const heights = fighters.map((fighter) => {
     fighter.character.position.set(0, 0, 0); fighter.character.updateMatrixWorld(true);
-    return new THREE.Box3().setFromObject(fighter.character, true).getSize(new THREE.Vector3()).y;
+    // Measure the body; headdresses rise above it by design.
+    const gear = fighter.rig.headgear, parent = gear?.parent;
+    parent?.remove(gear);
+    const height = new THREE.Box3().setFromObject(fighter.character, true).getSize(new THREE.Vector3()).y;
+    parent?.add(gear);
+    return height;
   });
   for (const height of heights) assert.ok(Math.abs(height - TARGET_HEIGHT) < .12, 'height ' + height);
+  assert.ok(fighters.every((f) => f.rig.headgear), 'every fighter wears a headdress');
   const rig = fighters[0].rig, other = fighters[1].rig.rest.LeftUpLeg.bone.quaternion.clone();
   animateCharacter(rig, 7.2, 0, 1 / 60, 1);
   assert.ok(rig.rest.LeftUpLeg.bone.quaternion.angleTo(rig.rest.LeftUpLeg.quaternion) > .001, 'the runner animates');

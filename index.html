@@ -33,6 +33,11 @@
         <div class="eyebrow">A MYTHIC MAYA BALLCOURT SPORT</div>
         <h1 class="title">SUN-STONE<br>LEAGUE</h1>
         <p class="tagline">Thread the ring. Hold the line. Two champions and their keepers, one sacred ball.</p>
+        <button id="fighter-btn" class="fighter-btn" aria-label="Choose your fighter">
+          <span class="fighter-swatch" id="fighter-swatch"></span>
+          <span class="fighter-text"><small>Your fighter</small><strong id="fighter-name">Balam</strong><em id="fighter-title">Jaguar Warrior</em></span>
+          <span class="fighter-change">Change ›</span>
+        </button>
         <div class="mode-grid">
           <button class="mode-btn" data-mode="practice"><span class="mode-icon">✦</span><strong>Learn to Play</strong><span>Guided practice on an empty court</span></button>
           <button class="mode-btn primary" data-mode="match"><span class="mode-icon">⚔</span><strong>Ballcourt Match</strong><span>2v2 vs AI · first to 15 or 3 minutes</span></button>
@@ -46,6 +51,22 @@
           <button id="howto-btn" class="link-btn">How to play</button>
         </div>
         <div id="records" class="records"></div>
+      </div>
+    </div>
+
+    <!-- ===================== FIGHTER SELECT ===================== -->
+    <div id="fighters" class="overlay">
+      <div class="fighters-layout">
+        <div id="fighter-stage" aria-hidden="true"></div>
+        <div class="panel fighters-panel">
+          <div class="eyebrow">CHOOSE YOUR FIGHTER</div>
+          <h2 id="pick-name">Balam</h2>
+          <div class="pick-title" id="pick-title">Jaguar Warrior</div>
+          <p class="pick-blurb" id="pick-blurb"></p>
+          <div id="fighter-cards" class="fighter-cards" role="listbox" aria-label="Fighters"></div>
+          <p class="pick-note">Every fighter plays the same — the choice is who you take onto the court.</p>
+          <div class="pick-actions"><button id="pick-confirm">Choose</button><button id="pick-cancel" class="secondary">Back</button></div>
+        </div>
       </div>
     </div>
 

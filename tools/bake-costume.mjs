@@ -71,16 +71,44 @@ function regionOf(v) {
 // Drawn from the Master Architect idol that crowns each temple: oxidised jade
 // armour, aged gold, deep bronze skin, bone ornament. The two teams read as
 // the same culture in different regalia rather than as two colour swaps.
+// Each fighter in the roster: a palette and a pattern for the pelt/garment.
+// `pattern` picks how the pelt areas (helm, sash, loincloth) are drawn.
 const TEAMS = {
-  balam: {   // jaguar: gold pelt over jade
+  balam: {   // Balam, jaguar warrior: gold pelt over jade
+    pattern: 'rosette',
     pelt: [198, 142, 58], peltDark: [44, 28, 16], skin: [134, 82, 48],
     cloth: [61, 122, 106], jade: [45, 110, 96], gold: [198, 158, 82],
     feather: [226, 176, 74], paint: [34, 22, 16], bone: [214, 199, 168],
   },
-  kuk: {     // quetzal: jade plumage over gold
+  kuk: {     // K'uk', quetzal warrior: jade plumage over gold
+    pattern: 'rosette',
     pelt: [46, 128, 112], peltDark: [16, 46, 44], skin: [134, 82, 48],
     cloth: [150, 68, 52], jade: [196, 156, 80], gold: [214, 180, 104],
     feather: [52, 158, 136], paint: [120, 42, 44], bone: [214, 199, 168],
+  },
+  hunahpu: { // Hunahpu, Hero Twin of the Popol Vuh: red body paint, black sun spots
+    pattern: 'spots', bodyPaint: true,
+    pelt: [176, 48, 36], peltDark: [24, 16, 14], skin: [150, 62, 44],
+    cloth: [232, 220, 196], jade: [44, 120, 98], gold: [214, 170, 80],
+    feather: [240, 232, 214], paint: [24, 16, 14], bone: [232, 220, 196],
+  },
+  kot: {     // Eagle knight: barred brown-and-white plumage
+    pattern: 'barred',
+    pelt: [214, 200, 172], peltDark: [92, 62, 38], skin: [128, 80, 50],
+    cloth: [92, 62, 38], jade: [40, 104, 92], gold: [206, 162, 72],
+    feather: [236, 226, 204], paint: [50, 34, 22], bone: [230, 216, 186],
+  },
+  sotz: {    // Kamazotz, the death bat of Xibalba: charcoal fur, blood red
+    pattern: 'fur',
+    pelt: [52, 46, 54], peltDark: [18, 14, 20], skin: [88, 64, 56],
+    cloth: [128, 30, 34], jade: [96, 34, 40], gold: [164, 132, 84],
+    feather: [40, 34, 44], paint: [140, 24, 30], bone: [196, 184, 160],
+  },
+  kame: {    // Hun-Kame, lord of Xibalba: bone-white skeleton over black
+    pattern: 'bones', bodyPaint: true,
+    pelt: [226, 214, 186], peltDark: [20, 18, 18], skin: [36, 32, 30],
+    cloth: [24, 22, 22], jade: [70, 120, 104], gold: [176, 146, 92],
+    feather: [226, 214, 186], paint: [236, 226, 200], bone: [236, 226, 200],
   },
 };
 
@@ -102,10 +130,36 @@ function rosette(x, y, z, scale) {
   return best;
 }
 
+// Bare skin, or full-body paint for the fighters who wear it: Hunahpu's spots
+// on red, the death lord's bones on black.
+function bodyColor(P, x, y, z) {
+  if (P.bodyPaint && P.pattern === 'spots') return peltColor({ ...P, pelt: P.skin }, x, y, z);
+  if (P.bodyPaint && P.pattern === 'bones') return peltColor({ ...P, peltDark: P.skin }, x, y, z);
+  return P.skin;
+}
+
 function mix(a, b, t) { return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]; }
 function shade(c, f) { return [c[0] * f, c[1] * f, c[2] * f]; }
 
 function peltColor(P, x, y, z) {
+  if (P.pattern === 'spots') {           // Hunahpu's round black spots
+    const d = rosette(x, y, z, 7);
+    return d < .2 ? P.peltDark : P.pelt;
+  }
+  if (P.pattern === 'barred') {          // eagle feather barring
+    const h = (y - minY) / height;
+    const bar = Math.sin(h * 140 + Math.sin(x * 40) * 1.2) > .55;
+    return bar ? P.peltDark : P.pelt;
+  }
+  if (P.pattern === 'fur') {             // bat fur: dark mottling
+    const n = hash(Math.round(x * 60), Math.round(y * 60), Math.round(z * 60));
+    return mix(P.pelt, P.peltDark, n * .7);
+  }
+  if (P.pattern === 'bones') {           // ribs and long bones painted on black
+    const h = (y - minY) / height;
+    const rib = Math.sin(h * 80) > .6 && Math.abs(x) > .025;
+    return rib ? P.pelt : P.peltDark;
+  }
   const d = rosette(x, y, z, 11);
   const ring = d > .19 && d < .33;        // open rosette ring
   const core = d <= .1;
@@ -156,13 +210,13 @@ function costume(P, x, y, z) {
     if (h < HIP + .035) return shade(P.gold, grain);                // belt
     const sash = Math.abs(x * 1.9 + (h - .64) * 6.0) < .36;         // broad pelt sash
     if (sash) return shade(peltColor(P, x, y, z), grain);
-    return shade(P.skin, grain);
+    return shade(bodyColor(P, x, y, z), grain);
   }
   // ---- legs
   if (h > .34) return shade(peltColor(P, x, y, z), grain);          // loincloth
   if (h < .055) return shade(mix(P.cloth, P.peltDark, .5), grain);  // sandal
   if (h < .105) return shade(P.bone, grain);                        // bone ankle wrap
-  return shade(P.skin, grain);
+  return shade(bodyColor(P, x, y, z), grain);
 }
 
 // ------------------------------------------------------------------ bake
@@ -229,5 +283,5 @@ function bake(teamKey) {
 }
 
 console.log(`body height ${height.toFixed(2)}, radius ${maxR.toFixed(2)}`);
-bake('balam');
-bake('kuk');
+const only = process.argv.slice(3);
+for (const key of Object.keys(TEAMS)) if (!only.length || only.includes(key)) bake(key);

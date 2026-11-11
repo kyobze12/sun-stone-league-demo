@@ -175,11 +175,13 @@ export class PowerupVisuals {
       if (!mesh) {
         const def = POWERUPS[p.kind];
         mesh = new THREE.Group();
-        const gem = new THREE.Mesh(new THREE.OctahedronGeometry(.42, 0), new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: .9, roughness: .3, metalness: .4 }));
+        const gem = new THREE.Mesh(new THREE.OctahedronGeometry(.42, 0), new THREE.MeshStandardMaterial({ color: def.color, emissive: def.color, emissiveIntensity: 1.3, roughness: .3, metalness: .4, transparent: true }));
         gem.position.y = 1.0; mesh.add(gem);
         const ring = new THREE.Mesh(new THREE.RingGeometry(.55, .75, 32), new THREE.MeshBasicMaterial({ color: def.color, transparent: true, opacity: .55, side: THREE.DoubleSide, depthWrite: false }));
         ring.rotation.x = -Math.PI / 2; ring.position.y = .04; mesh.add(ring);
-        const light = new THREE.PointLight(def.color, 6, 5, 2); light.position.y = 1.2; mesh.add(light);
+        // No point light: adding or removing one changes the scene's light
+        // count, which recompiles every lit shader — a visible hitch on iPhone
+        // each time a power-up spawned or was collected.
         mesh.userData = { gem, ring, kind: p.kind };
         mesh.position.copy(p.pos);
         this.scene.add(mesh); this.meshes.set(p.id, mesh);
@@ -188,11 +190,15 @@ export class PowerupVisuals {
       gem.rotation.y = time * 2; gem.position.y = 1 + Math.sin(time * 3 + p.id) * .15;
       ring.scale.setScalar(1 + Math.sin(time * 4 + p.id) * .12);
       const fade = Math.min(1, p.life / 2);
-      gem.material.opacity = fade; gem.material.transparent = fade < 1;
+      gem.material.opacity = fade;
     }
-    for (const [id, mesh] of this.meshes) if (!seen.has(id)) { this.scene.remove(mesh); this.meshes.delete(id); }
+    for (const [id, mesh] of this.meshes) if (!seen.has(id)) { this.drop(mesh); this.meshes.delete(id); }
   }
-  clear() { for (const mesh of this.meshes.values()) this.scene.remove(mesh); this.meshes.clear(); }
+  drop(mesh) {
+    this.scene.remove(mesh);
+    mesh.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+  }
+  clear() { for (const mesh of this.meshes.values()) this.drop(mesh); this.meshes.clear(); }
 }
 
 // ---------------------------------------------------------------- camera

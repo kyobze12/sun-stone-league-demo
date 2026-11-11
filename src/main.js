@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { addCinematics } from './cinematic.js';
 import { addRuins } from './ruins.js';
 import { createCourt, loadStoneTextures, loadEnvironment, loadIdol, updateCourt, addLighting } from './court.js';
-import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter } from './characters.js';
+import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter, createCharacter, pruneClips } from './characters.js';
+import { ROSTER, DEFAULT_LOOK, lookById, savedLook, saveLook } from './roster.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
 import { setupInput, readInput, resetInput, isTouch } from './input.js';
 import { World, EMPTY_INPUT } from './world.js';
@@ -30,15 +31,28 @@ camera.position.set(0, 7, -16);
 let composer = createComposer(renderer, scene, camera, quality);
 const touch = isTouch();
 
-addEventListener('resize', () => {
-  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
-  renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY[quality].pixelRatio));
-  renderer.setSize(innerWidth, innerHeight);
-  composer?.setSize(innerWidth, innerHeight);
-  if (composer?.userData.grade) composer.userData.grade.uniforms.aspect.value = innerWidth / innerHeight;
-});
+// iOS often reports the old size when 'resize' fires mid-rotation, so the
+// same handler also runs from visualViewport and a frame after an
+// orientation change, and only does work when the size really changed.
+let lastSize = '';
+function onResize() {
+  const w = innerWidth, h = innerHeight, ratio = Math.min(devicePixelRatio, QUALITY[quality].pixelRatio);
+  const key = `${w}x${h}@${ratio}`;
+  if (key === lastSize) return;
+  lastSize = key;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setPixelRatio(ratio);
+  renderer.setSize(w, h);
+  composer?.setPixelRatio?.(ratio);
+  composer?.setSize(w, h);
+  if (composer?.userData.grade) composer.userData.grade.uniforms.aspect.value = w / h;
+}
+addEventListener('resize', onResize);
+visualViewport?.addEventListener('resize', onResize);
+addEventListener('orientationchange', () => { requestAnimationFrame(onResize); setTimeout(onResize, 300); });
 
 const lights = addLighting(scene);
+lights.sun.shadow.mapSize.setScalar(QUALITY[quality].shadowSize);
 const ballMesh = createBall(scene);
 const particles = new Particles(scene, QUALITY[quality].particles);
 const powerupVisuals = new PowerupVisuals(scene);
@@ -67,6 +81,7 @@ let characterSource = null;
   try { await loadAnimations(manager); } catch { missing.push('animations'); }
   characterSource = await loadCharacterModel(manager, './assets/characters/player.glb').catch(() => null);
   if (!characterSource) missing.push('fighter model');
+  pruneClips(characterSource);
   // Don't fail silently: the fallbacks still produce a playable game, but the
   // blocky stand-in fighters look like a bug rather than a degraded asset load.
   if (missing.length) {
@@ -92,7 +107,7 @@ practiceMarker.rotation.x = -Math.PI / 2; practiceMarker.position.y = .05; pract
 
 // ------------------------------------------------------------ game state
 const G = {
-  mode: null, world: null, match: null, fighters: new Map(), humans: [], localIds: [],
+  mode: null, world: null, match: null, fighters: new Map(), humans: [], localIds: [], look: savedLook(),
   net: null, role: 'local', paused: false, timeScale: 1, slowmo: 0, excitement: 0,
   guest: { snapshots: [], lastInput: null }, tutorial: null, elapsed: 0,
 };
@@ -137,10 +152,47 @@ function showMenu() {
 }
 
 // ------------------------------------------------------------ fighters (render side)
+/**
+ * Who wears what. Your pick goes on your fighter; everyone else wears their
+ * team's regalia — unless your pick matches the rivals' look, in which case
+ * they change into another fighter so you never face your own costume.
+ */
+function looksFor(players) {
+  const looks = {};
+  const mine = G.mode ? G.world.players.filter((p) => G.localIds.includes(p.id)) : [];
+  const myTeam = mine[0]?.team;
+  const used = new Set(mine.map(() => G.look));
+  const spare = ROSTER.map((r) => r.id).filter((id) => !used.has(id) && !Object.values(DEFAULT_LOOK).includes(id));
+  for (const p of players) {
+    if (mine.length && p.id === mine[0].id) { looks[p.id] = G.look; continue; }
+    let look = DEFAULT_LOOK[p.team];
+    if (myTeam && p.team !== myTeam && look === G.look) look = spare[0] || look;
+    looks[p.id] = look;
+  }
+  return looks;
+}
+
+/**
+ * Free a fighter's GPU resources. Skinned meshes share geometry with the
+ * source model and their maps are the shared costume skins, so only their
+ * cloned materials go; labels, markers and headdresses are per-fighter.
+ */
+function disposeCharacter(root) {
+  root.traverse((object) => {
+    if (!object.isMesh && !object.isSprite) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material) continue;
+      if (object.isSprite && material.map) material.map.dispose();
+      material.dispose();
+    }
+    if (!object.isSkinnedMesh && !object.isSprite) object.geometry?.dispose();
+  });
+}
 function rebuildFighters() {
-  for (const fighter of G.fighters.values()) scene.remove(fighter.character);
+  for (const fighter of G.fighters.values()) { scene.remove(fighter.character); disposeCharacter(fighter.character); }
   G.fighters.clear();
-  const { fighters } = spawnRoster(scene, characterSource, G.world.players);
+  const { fighters } = spawnRoster(scene, characterSource, G.world.players, looksFor(G.world.players));
   for (const fighter of fighters) {
     const marker = new THREE.Mesh(new THREE.CircleGeometry(.52, 24), new THREE.MeshBasicMaterial({ color: TEAMS[fighter.team].color, transparent: true, opacity: .26, depthWrite: false }));
     marker.rotation.x = -Math.PI / 2; marker.position.y = .035; fighter.character.add(marker); fighter.marker = marker;
@@ -199,6 +251,7 @@ function startMode(mode, options = {}) {
   audio.tone(480, .12);
   cameraRig.stopCinematic();
   cameraRig.snap();
+  G.hitstop = 0; G.slowmo = 0; G.timeScale = 1;
   canvas.focus();
   updateHUD(true);
 }
@@ -212,6 +265,81 @@ document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListen
 $('restart-btn').addEventListener('click', () => { if (G.role === 'guest') { showMenu(); return; } startMode(G.mode); if (G.role === 'host') sendStart(); });
 $('menu-btn').addEventListener('click', showMenu);
 $('quit-btn').addEventListener('click', showMenu);
+// ------------------------------------------------------------ fighter select
+// A turntable preview drawn into the stage area with a scissored viewport on
+// the main renderer, so it needs no second WebGL context on the phone.
+const picker = { open: false, id: G.look, scene: null, camera: null, model: null, spin: 0 };
+function refreshFighterButton() {
+  const look = lookById(G.look);
+  $('fighter-name').textContent = look.name; $('fighter-title').textContent = look.title;
+  $('fighter-swatch').style.background = `conic-gradient(${look.swatch[0]} 0 50%, ${look.swatch[1]} 0 80%, ${look.swatch[2]} 0)`;
+}
+function buildPickerCards() {
+  $('fighter-cards').innerHTML = ROSTER.map((r) => `<button class="fighter-card" role="option" data-id="${r.id}" aria-selected="false"><span class="fighter-swatch" style="background:conic-gradient(${r.swatch[0]} 0 50%, ${r.swatch[1]} 0 80%, ${r.swatch[2]} 0)"></span>${r.name}</button>`).join('');
+  $('fighter-cards').querySelectorAll('.fighter-card').forEach((card) => card.addEventListener('click', () => selectPick(card.dataset.id)));
+}
+function selectPick(id) {
+  picker.id = id;
+  const look = lookById(id);
+  $('pick-name').textContent = look.name; $('pick-title').textContent = look.title; $('pick-blurb').textContent = look.blurb;
+  $('fighter-cards').querySelectorAll('.fighter-card').forEach((card) => card.setAttribute('aria-selected', String(card.dataset.id === id)));
+  if (!picker.scene) {
+    picker.scene = new THREE.Scene();
+    picker.scene.environment = scene.environment;
+    picker.scene.add(new THREE.HemisphereLight(0x9fc0e0, 0x5a3c22, .9));
+    const key = new THREE.DirectionalLight(0xffd29a, 2.4); key.position.set(-3, 5, 4); picker.scene.add(key);
+    const rim = new THREE.DirectionalLight(0x9fc4ff, 1.6); rim.position.set(3, 3, -4); picker.scene.add(rim);
+    const plinth = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.25, .3, 32), new THREE.MeshStandardMaterial({ color: 0x8a7556, roughness: .9 }));
+    plinth.position.y = -.15; picker.scene.add(plinth);
+    picker.camera = new THREE.PerspectiveCamera(30, 1, .1, 50);
+  }
+  if (picker.model) { picker.scene.remove(picker.model); disposeCharacter(picker.model); }
+  picker.model = createCharacter(characterSource, { team: 'balam' }, id);
+  picker.scene.add(picker.model);
+  // Stand the fighter on the plinth whatever pose the rig rests in.
+  picker.model.userData.rig?.mixer?.update(.01);
+  picker.model.updateMatrixWorld(true);
+  picker.model.position.y -= new THREE.Box3().setFromObject(picker.model, true).min.y;
+}
+function openPicker() {
+  picker.open = true; show('menu', false); show('fighters', true);
+  selectPick(G.look);
+}
+function closePicker(confirm) {
+  if (confirm) { G.look = picker.id; saveLook(G.look); refreshFighterButton(); if (!G.mode && G.world) rebuildFighters(); }
+  picker.open = false; show('fighters', false); show('menu', true);
+}
+function renderPicker(dt) {
+  if (!picker.open || !picker.model) return;
+  const rect = $('fighter-stage').getBoundingClientRect();
+  if (rect.width < 10 || rect.height < 10) return;
+  picker.spin += dt * .5;
+  picker.model.rotation.y = Math.PI + Math.sin(picker.spin) * .8;  // face the viewer, then sway
+  picker.model.userData.rig?.mixer?.update(dt);
+  const cam = picker.camera;
+  cam.aspect = rect.width / rect.height;
+  const fit = cam.aspect < .8 ? 8.4 : 6.4;
+  cam.position.set(0, 1.5, fit); cam.lookAt(0, 1.15, 0); cam.updateProjectionMatrix();
+  const y = innerHeight - rect.bottom;
+  renderer.setScissorTest(true);
+  renderer.setScissor(rect.left, y, rect.width, rect.height);
+  renderer.setViewport(rect.left, y, rect.width, rect.height);
+  renderer.setClearColor(0x1a0e07, 1);
+  renderer.clear();
+  // The composer normally tone-maps in its output pass; a direct render
+  // needs the renderer to do it.
+  const toneMapping = renderer.toneMapping;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.render(picker.scene, cam);
+  renderer.toneMapping = toneMapping;
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+}
+buildPickerCards();
+refreshFighterButton();
+$('fighter-btn').addEventListener('click', openPicker);
+$('pick-confirm').addEventListener('click', () => closePicker(true));
+$('pick-cancel').addEventListener('click', () => closePicker(false));
 $('howto-btn').addEventListener('click', () => { show('menu', false); show('howto', true); });
 $('howto-close').addEventListener('click', () => { show('howto', false); if (!G.mode) show('menu', true); });
 $('quality').addEventListener('change', (event) => { localStorage.setItem('ssl-quality', event.target.value); location.reload(); });
@@ -441,7 +569,7 @@ $('host-btn').addEventListener('click', async () => {
     status.innerHTML = `Share this code with your friend:<div class="code">${G.net.code}</div>Waiting for them to join…`;
     await waiting;
     status.innerHTML = 'Friend connected! Starting…';
-    G.net.onMessage = (data) => { if (data.t === 'in') G.guest.lastInput = data.i; };
+    G.net.onMessage = (data) => { if (data.t === 'in') { G.guest.lastInput = data.i; G.guest.inputAt = performance.now(); } };
     setTimeout(() => { startMode('online', { seed: Date.now() & 0xffff }); sendStart(); }, 600);
   } catch (error) { status.textContent = 'Could not create a room: ' + (error.message || error.type || 'unknown error'); closeNet(); }
   $('host-btn').disabled = false;
@@ -462,9 +590,19 @@ $('join-btn').addEventListener('click', async () => {
   } catch (error) { status.textContent = 'Could not join: ' + (error.message || error.type || 'unknown error'); closeNet(); }
   $('join-btn').disabled = false;
 });
-function sendStart() { G.net?.send({ t: 'start', seed: G.world.seed, difficulty: $('difficulty').value }); }
+// The data channel is unreliable (it carries 20 Hz snapshots), so the start
+// message is repeated; the guest ignores copies for a match it already began.
+function sendStart() {
+  const msg = { t: 'start', seed: G.world.seed, difficulty: $('difficulty').value };
+  for (const delay of [0, 250, 700, 1500]) setTimeout(() => G.net?.send(msg), delay);
+}
 function onGuestMessage(data) {
-  if (data.t === 'start') { startMode('online', { guest: true, seed: data.seed }); G.guest.snapshots.length = 0; return; }
+  if (data.t === 'start') {
+    if (G.mode === 'online' && G.world?.seed === data.seed && G.match?.phase !== 'ended') return;   // a repeat
+    startMode('online', { guest: true, seed: data.seed }); G.guest.snapshots.length = 0; return;
+  }
+  // Every start copy lost: the first snapshot is enough to join the match.
+  if (data.t === 'st' && G.mode !== 'online') startMode('online', { guest: true, seed: data.s?.seed ?? 1 });
   if (data.t === 'st') {
     G.guest.snapshots.push({ at: performance.now(), s: data.s, m: data.m });
     if (G.guest.snapshots.length > 4) G.guest.snapshots.shift();
@@ -518,7 +656,10 @@ function collectInputs() {
     inputs['kuk-striker'] = readInput('p2', { facing: -1 });
   } else if (G.role === 'host') {
     inputs['balam-striker'] = readInput('p1', { facing: 1, touch, arrowsAsP1: true });
-    inputs['kuk-striker'] = G.guest.lastInput || EMPTY_INPUT;
+    // A guest who backgrounds the app stops sending; don't keep running their
+    // fighter on the last stick position.
+    const fresh = performance.now() - (G.guest.inputAt || 0) < 300;
+    inputs['kuk-striker'] = (fresh && G.guest.lastInput) || EMPTY_INPUT;
   } else {
     inputs['balam-striker'] = readInput('p1', { facing: 1, touch, arrowsAsP1: true });
   }
@@ -530,7 +671,9 @@ function tick() {
   const rawDelta = clock.getDelta();
   const frameDt = Math.min(rawDelta, .1);
   const running = G.mode && !G.paused;
-  if (G.slowmo > 0) { G.slowmo -= frameDt; if (G.slowmo <= 0) G.timeScale = 1; }
+  // Everything that should freeze on pause runs on liveDt.
+  const liveDt = G.paused ? 0 : frameDt;
+  if (G.slowmo > 0) { G.slowmo -= liveDt; if (G.slowmo <= 0) G.timeScale = 1; }
   // Hit-stop: a few frames of frozen time on a strike sell its weight.
   const frozen = G.hitstop > 0; if (frozen) G.hitstop -= frameDt;
   const dt = running && !frozen ? frameDt * G.timeScale : 0;
@@ -565,7 +708,7 @@ function tick() {
       const f = G.fighters.get(player.id); if (!f) continue;
       f.character.position.set(player.pos.x, 0, player.pos.z);
       f.character.rotation.y = player.facing;
-      animateCharacter(f.rig, player.speed, player.swingTimer, frameDt, G.elapsed, { stun: player.stun, dash: player.dash, charge: player.charge });
+      animateCharacter(f.rig, player.speed, player.swingTimer, liveDt, G.elapsed, { stun: player.stun, dash: player.dash, charge: player.charge });
       f.marker.material.opacity = G.localIds.includes(player.id) ? .5 : .22;
       f.marker.material.color.setHex(player.wind > 0 ? POWERUPS.wind.color : player.jaguar ? POWERUPS.jaguar.color : TEAMS[player.team].color);
       // Role tags only on fighters out in the court: one standing by the lens
@@ -596,7 +739,7 @@ function tick() {
       aimGroup.scale.setScalar(me.charge >= 0 ? 1 + me.charge * .35 : 1);
     } else aimGroup.visible = false;
     const camPlayer = me || world.players[0];
-    cameraRig.update(frameDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? facingOf(me.id) : 1, intro: !G.mode });
+    cameraRig.update(liveDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? facingOf(me.id) : 1, intro: !G.mode });
   }
   if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement, idolMixers, frameDt);
   particles.update(frameDt);
@@ -604,6 +747,7 @@ function tick() {
   cinematics?.update(frameDt, now);
   if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = now % 100;
   if (composer) composer.render(); else renderer.render(scene, camera);
+  renderPicker(frameDt);
 }
 tick();
 // Debug handle for automated tests and self-hosted sessions.

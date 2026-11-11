@@ -122,9 +122,8 @@ export async function addCinematics(scene, lights, quality, manager) {
   const [flareMain, flareGhost, spark] = await Promise.all([load('lensflare0.png'), load('lensflare3.png'), load('spark1.png')]);
 
   if (flareMain && flareGhost) {
-    // A point light far along the sun's direction carries the flare; it adds
-    // no light of its own.
-    const carrier = new THREE.PointLight(0xffffff, 0, 1);
+    // An empty object far along the sun's direction carries the flare.
+    const carrier = new THREE.Object3D();   // a light here would cost every lit pixel
     carrier.position.copy(lights.sun.position).normalize().multiplyScalar(140);
     const flare = new Lensflare();
     const warm = new THREE.Color(0xffc98a);

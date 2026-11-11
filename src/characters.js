@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { ROSTER, DEFAULT_LOOK, lookById, buildHeadgear } from './roster.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import { TEAMS } from './config.js';
@@ -97,23 +98,56 @@ export async function loadAnimations(manager, url = './assets/characters/locomot
   return CLIPS;
 }
 
+/** Drop clip tracks for bones the fighter mesh does not have (finger bones). */
+export function pruneClips(model) {
+  if (!CLIPS || !model) return;
+  const names = new Set();
+  model.traverse((o) => names.add(o.name));
+  for (const clip of Object.values(CLIPS)) {
+    const kept = clip.tracks.filter((t) => names.has(t.name.slice(0, t.name.lastIndexOf('.'))));
+    // If names disagree wholesale, keep the clip untouched rather than empty it.
+    if (kept.length > clip.tracks.length * .5) clip.tracks = kept;
+  }
+}
+
 export async function loadSkins(manager) {
   const loader = new THREE.TextureLoader(manager);
-  const [balam, kuk] = await Promise.all([
-    loader.loadAsync('./assets/characters/skin_balam.webp'),
-    loader.loadAsync('./assets/characters/skin_kuk.webp'),
-  ]);
-  for (const [team, texture] of [['balam', balam], ['kuk', kuk]]) {
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.flipY = false;            // glTF UV convention
-    texture.anisotropy = 4;
-    SKINS[team] = texture;
-  }
+  await Promise.all(ROSTER.map(async ({ id }) => {
+    try {
+      const texture = await loader.loadAsync(`./assets/characters/skin_${id}.webp`);
+      texture.colorSpace = THREE.SRGBColorSpace;
+      texture.flipY = false;            // glTF UV convention
+      texture.anisotropy = 4;
+      SKINS[id] = texture;
+    } catch { /* that fighter falls back to team colour */ }
+  }));
+  if (!SKINS.balam && !SKINS.kuk) throw new Error('no fighter skins');
   return SKINS;
 }
 
-function dressAs(root, team) {
-  const skin = SKINS[team];
+/** Fix the headdress to the head bone, sized and oriented in the rest pose. */
+function addHeadgear(rig, gear) {
+  const head = rig.bones.Head;
+  if (!head || !gear) return;
+  const piece = buildHeadgear(gear);
+  rig.root.updateMatrixWorld(true);
+  const headPos = head.getWorldPosition(new THREE.Vector3());
+  const headQ = head.getWorldQuaternion(new THREE.Quaternion());
+  const headS = head.getWorldScale(new THREE.Vector3());
+  const rootQ = rig.root.getWorldQuaternion(new THREE.Quaternion());
+  // Built in fighter space (y up, z toward the fighter's front); the source
+  // model faces -z inside its container after normalizeModel's half turn.
+  const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+  piece.quaternion.copy(headQ.clone().invert().multiply(rootQ).multiply(facing));
+  const scale = TARGET_HEIGHT / 1.96;
+  piece.scale.setScalar(scale / headS.x);
+  piece.position.copy(head.worldToLocal(headPos.clone()));
+  head.add(piece);
+  rig.headgear = piece;
+}
+
+function dressAs(root, look, team) {
+  const skin = SKINS[look] || SKINS[team];
   root.traverse((object) => {
     if (!object.isMesh) return;
     const source = Array.isArray(object.material) ? object.material : [object.material];
@@ -133,11 +167,11 @@ function dressAs(root, team) {
   });
 }
 
-function makeContainer(model, team) {
+function makeContainer(model, team, look) {
   const container = new THREE.Group();
   normalizeModel(model);
   model.traverse((object) => { if (object.isMesh) { object.castShadow = true; object.receiveShadow = true; } });
-  dressAs(model, team);
+  dressAs(model, look, team);
   container.add(model);
   const bones = collectBones(model);
   container.userData.rig = { root: container, body: model, bones, procedural: false, baseY: 0 };
@@ -188,12 +222,14 @@ function rotateBone(rig,name,x=0,y=0,z=0) {
   });
 }
 
-function createCharacter(sourceModel, fighter) {
+export function createCharacter(sourceModel, fighter, lookId = null) {
   if (sourceModel) {
     try {
-      const character = makeContainer(cloneSkeleton(sourceModel), fighter.team);
+      const look = lookById(lookId || DEFAULT_LOOK[fighter.team]);
+      const character = makeContainer(cloneSkeleton(sourceModel), fighter.team, look.id);
       if (Object.keys(character.userData.rig.bones).length < 5) throw new Error('Static T-pose model');
       prepareImportedRig(character.userData.rig);
+      addHeadgear(character.userData.rig, look.gear);
       return character;
     } catch {
       // A malformed or static source model should not prevent the match from starting.
@@ -202,9 +238,9 @@ function createCharacter(sourceModel, fighter) {
   return proceduralWarrior(fighter.team);
 }
 
-export function spawnRoster(scene, sourceModel = null, players = []) {
+export function spawnRoster(scene, sourceModel = null, players = [], looks = {}) {
   const fighters = players.map((player) => {
-    const character = createCharacter(sourceModel, player);
+    const character = createCharacter(sourceModel, player, looks[player.id]);
     character.position.copy(player.pos);
     character.userData.fighterId = player.id;
     character.userData.team = player.team;

@@ -56,6 +56,43 @@ button.secondary { background: linear-gradient(180deg, #5c4030, #2e1c12); color:
 button.link-btn { background: none; box-shadow: none; color: var(--gold); text-decoration: underline; padding: 6px; min-height: 0; }
 button:disabled { opacity: .5; cursor: default; }
 
+/* ---- fighter pick */
+.fighter-btn { display: flex; align-items: center; gap: 12px; width: 100%; margin: 4px 0 10px; padding: 10px 14px; text-align: left; background: linear-gradient(180deg, #4a2c16, #2a150a); color: var(--sand); box-shadow: 0 5px 0 #130903, inset 0 0 0 1px rgba(244,194,74,.3); min-height: 60px; }
+.fighter-swatch { flex: none; width: 40px; height: 40px; border-radius: 50%; border: 2px solid rgba(244,194,74,.6); }
+.fighter-text { display: flex; flex-direction: column; flex: 1; line-height: 1.15; }
+.fighter-text small { font-size: 10px; letter-spacing: .16em; text-transform: uppercase; opacity: .7; }
+.fighter-text strong { font-family: var(--display); font-size: 20px; color: #fff3cf; }
+.fighter-text em { font-style: normal; font-size: 12px; opacity: .8; }
+.fighter-change { font-size: 13px; font-weight: 800; color: var(--gold); }
+#fighters.overlay { background: linear-gradient(90deg, rgba(8,3,0,.0) 0%, rgba(8,3,0,.0) 45%, rgba(8,3,0,.6) 70%); backdrop-filter: none; padding: 0; }
+.fighters-layout { position: absolute; inset: 0; display: grid; grid-template-columns: 1fr minmax(300px, 440px); }
+#fighter-stage { position: relative; }
+.fighters-panel { width: auto; max-height: none; margin: calc(12px + var(--safe-top)) calc(12px + var(--safe-right)) calc(12px + var(--safe-bottom)) 0; text-align: left; display: flex; flex-direction: column; }
+.fighters-panel h2 { margin: 2px 0 0; font-family: var(--display); font-size: 30px; color: #fff3cf; }
+.pick-title { color: var(--gold); font-weight: 800; letter-spacing: .08em; text-transform: uppercase; font-size: 13px; }
+.pick-blurb { margin: 8px 0 12px; font-size: 14px; opacity: .9; min-height: 2.6em; }
+.fighter-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.fighter-card { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 4px 8px; min-height: 0; background: linear-gradient(180deg, #3f2615, #221208); color: var(--sand); box-shadow: 0 4px 0 #130903, inset 0 0 0 1px rgba(244,194,74,.15); font-size: 12px; font-weight: 800; }
+.fighter-card .fighter-swatch { width: 34px; height: 34px; }
+.fighter-card[aria-selected="true"] { box-shadow: 0 4px 0 #130903, inset 0 0 0 2px var(--gold); background: linear-gradient(180deg, #6a3e1c, #321a0b); color: #fff3cf; }
+.pick-note { font-size: 12px; opacity: .65; margin: 12px 0 10px; }
+.pick-actions { display: flex; gap: 10px; margin-top: auto; }
+.pick-actions button { flex: 1; }
+@media (orientation: portrait) {
+  .fighters-layout { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
+  .fighters-panel { margin: 0 calc(10px + var(--safe-right)) calc(10px + var(--safe-bottom)) calc(10px + var(--safe-left)); }
+  #fighters.overlay { background: linear-gradient(180deg, rgba(8,3,0,0) 40%, rgba(8,3,0,.6) 60%); }
+}
+@media (max-height: 460px) and (orientation: landscape) {
+  .fighters-panel { padding: 12px 14px; }
+  .fighters-panel h2 { font-size: 22px; }
+  .pick-blurb { font-size: 12px; margin: 4px 0 8px; min-height: 0; }
+  .pick-note { display: none; }
+  .fighter-cards { gap: 6px; }
+  .fighter-card { padding: 6px 2px; font-size: 11px; }
+  .fighter-card .fighter-swatch { width: 26px; height: 26px; }
+  .fighter-btn { min-height: 48px; padding: 6px 12px; margin: 2px 0 6px; }
+}
 .mode-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 8px 0 14px; }
 .mode-btn { display: grid; grid-template-columns: 34px 1fr; grid-template-rows: auto auto; text-align: left; align-items: center; padding: 12px 12px; background: linear-gradient(180deg, #3f2615, #221208); color: var(--sand); box-shadow: 0 5px 0 #130903, inset 0 0 0 1px rgba(244,194,74,.18); min-height: 64px; }
 .mode-btn.primary { background: linear-gradient(180deg, #a1621d, #5e3510); box-shadow: 0 5px 0 #2f1a06, inset 0 0 0 1px rgba(255,230,160,.35); }
