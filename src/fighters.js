@@ -7,11 +7,35 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
+import { toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { ROSTER } from './roster.js';
 
 export const FIGHTER_HEIGHT = 2.15;
+
+/**
+ * Soften the faceted low-poly shading: normals are averaged across edges
+ * flatter than ~60°, so rounded forms shade smoothly while real creases (the
+ * edge of a helmet, a belt) stay crisp. Done once per model, shared by clones.
+ */
+function smoothen(root) {
+  root.traverse((o) => {
+    if (!o.isMesh || o.geometry.userData.smoothed) return;
+    try { o.geometry = toCreasedNormals(o.geometry, THREE.MathUtils.degToRad(60)); o.geometry.userData.smoothed = true; } catch { /* keep as is */ }
+  });
+  return root;
+}
 const MODELS = {};
 let MOVES = null;
+// Fighters that bring their own animation set instead of the KayKit library.
+// Muflus (Curse of Mirra, CC BY-SA 4.0) maps his clips onto the same roles.
+const OWN = {};
+const OWN_MAP = {
+  muflus: {
+    loop: { idle: 'GR1_Idle', guardIdle: 'GR1_Idle', walk: 'GR2_Running', back: 'GR2_Running', run: 'GR2_Running', left: 'GR2_Running', right: 'GR2_Running', block: 'GR1_Idle' },
+    move: { punchA: 'GR5_Crush', punchB: 'GR5_Crush', kick: 'GR5_Crush', spin: 'GR5_Crush', lob: 'GR5_Crush', blockHit: null, hitA: null, hitB: null,
+      death: 'GR7_Defeat', dash: 'GR4_LeapIn', blast: 'GR3_Rage', transform: 'GR3_Rage', raise: 'GR3_Rage', cheer: 'GR6_Victory', taunt: 'GR3_Rage', standUp: null },
+  },
+};
 
 /** Loads every roster body plus the move library. Resolves to true if usable. */
 export async function loadFighters(manager, ext = 'glb') {
@@ -21,12 +45,15 @@ export async function loadFighters(manager, ext = 'glb') {
     for (const clip of gltf.animations) MOVES[clip.name] = clip;
   });
   const bodies = ROSTER.map(({ id }) => loader.loadAsync(`./assets/fighters/${id}.${ext}`)
-    .then((gltf) => { MODELS[id] = gltf.scene; })
+    .then((gltf) => { MODELS[id] = smoothen(gltf.scene); })
     .catch(() => {}));
-  await Promise.all([moves, ...bodies]);
+  const beasts = Object.keys(OWN_MAP).map((id) => loader.loadAsync(`./assets/beasts/${id}.${ext}`)
+    .then((gltf) => { MODELS[id] = gltf.scene; OWN[id] = Object.fromEntries(gltf.animations.map((c) => [c.name, c])); })
+    .catch(() => {}));
+  await Promise.all([moves, ...bodies, ...beasts]);
   return !!MOVES && Object.keys(MODELS).length > 0;
 }
-export const hasFighter = (id) => !!MODELS[id] && !!MOVES;
+export const hasFighter = (id) => !!MODELS[id] && (!!MOVES || !!OWN[id]);
 
 // Which clip plays for what.
 const LOOP = { idle: 'Unarmed_Idle', guardIdle: 'Idle_Combat', walk: 'Walking_A', back: 'Walking_Backwards', run: 'Running_A', left: 'Running_Strafe_Left', right: 'Running_Strafe_Right', block: 'Blocking' };
@@ -39,13 +66,15 @@ export const MOVE = {
 
 export function createFighter(id) {
   const source = MODELS[id];
-  if (!source || !MOVES) return null;
+  const own = OWN[id], map = OWN_MAP[id];
+  if (!source || (!MOVES && !own)) return null;
+  const clipFor = (key, loop) => own ? own[(loop ? map.loop : map.move)[key]] : MOVES[(loop ? LOOP : MOVE)[key] || key];
   const body = cloneSkeleton(source);
   // Normalise height and stand on the floor.
   body.updateMatrixWorld(true);
   const box = new THREE.Box3().setFromObject(body, true);
   const height = box.max.y - box.min.y;
-  body.scale.multiplyScalar(FIGHTER_HEIGHT / height);
+  body.scale.multiplyScalar((own ? FIGHTER_HEIGHT * 1.2 : FIGHTER_HEIGHT) / height);   // the brute stands a head taller
   body.updateMatrixWorld(true);
   const box2 = new THREE.Box3().setFromObject(body, true);
   body.position.y -= box2.min.y;
@@ -53,6 +82,7 @@ export function createFighter(id) {
     if (!o.isMesh) return;
     o.castShadow = true; o.receiveShadow = true;
     o.material = o.material.clone();
+    if (own) return;   // a full PBR model: keep its own metal and roughness maps
     o.material.roughness = Math.max(.55, o.material.roughness ?? .8);
     o.material.metalness = Math.min(.15, o.material.metalness ?? 0);
   });
@@ -60,14 +90,18 @@ export function createFighter(id) {
   container.add(body);
   const mixer = new THREE.AnimationMixer(body);
   const actions = {};
-  for (const [key, name] of Object.entries(LOOP)) {
-    const clip = MOVES[name]; if (!clip) continue;
+  const used = new Set();
+  for (const key of Object.keys(LOOP)) {
+    let clip = clipFor(key, true); if (!clip) continue;
+    if (used.has(clip)) clip = clip.clone();   // one action per role, even when roles share a clip
+    used.add(clip);
     const action = mixer.clipAction(clip); action.play(); action.setEffectiveWeight(key === 'idle' ? 1 : 0);
     actions[key] = action;
   }
   const bones = {};
   body.traverse((o) => { if (o.isBone) bones[o.name] = o; });
-  container.userData.rig = { kind: 'clip', root: container, body, mixer, actions, bones, oneShot: null, oneShotUntil: 0, weights: {}, last: null, dead: false, time: 0 };
+  if (own) for (const [key, action] of Object.entries(actions)) if (key === 'walk' || key === 'back' || key === 'left' || key === 'right') action.timeScale = .7;
+  container.userData.rig = { kind: 'clip', clipFor, root: container, body, mixer, actions, bones, oneShot: null, oneShotUntil: 0, weights: {}, last: null, dead: false, time: 0 };
   mixer.addEventListener('finished', (e) => {
     const rig = container.userData.rig;
     if (rig.oneShot === e.action && !rig.dead) { rig.oneShot.fadeOut(.15); rig.oneShot = null; }
@@ -77,8 +111,8 @@ export function createFighter(id) {
 
 /** Play a one-shot move over the locomotion (punch, hit reaction, cast...). */
 export function playMove(rig, key, { speed = 1, hold = false } = {}) {
-  if (rig?.kind !== 'clip' || !MOVES) return;
-  const clip = MOVES[MOVE[key] || key]; if (!clip) return;
+  if (rig?.kind !== 'clip') return;
+  const clip = rig.clipFor(key, false); if (!clip) return;
   if (rig.dead && key !== 'standUp') return;
   const action = rig.mixer.clipAction(clip);
   if (rig.oneShot && rig.oneShot !== action) rig.oneShot.fadeOut(.08);

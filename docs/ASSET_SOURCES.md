@@ -67,6 +67,31 @@ The fox is recoloured as the coyote nawal. The parrot and stork fly as scarlet
 macaws and jabiru storks; like the other three.js example files they carry no
 per-file licence notice, so treat their provenance as unverified.
 
+## Curse of Mirra (LambdaClass) — CC BY-SA 4.0
+
+| File | Source |
+| --- | --- |
+| `public/assets/beasts/muflus.glb` | "Muflus" model and animations, `Models/Characters/Muflus/` |
+| `public/assets/audio/menu.mp3` | `Audio/Music/General/Main Theme/main theme V5 .wav` (first 115 s, faded) |
+| `public/assets/audio/match.mp3` | `Audio/Music/General/Soundtrack/TRACK 1 .wav` |
+| `public/assets/audio/duel.mp3` | `Audio/Music/General/Trailers/Trailer 1.wav` |
+| `public/assets/audio/fire.mp3`, `wind.mp3`, `gong.mp3` | `Audio/Music/General/Ambient sounds/` — fuego, low wind, gongs (gong trimmed to 4.5 s) |
+| `public/assets/audio/hit_heavy.mp3`, `impact.mp3`, `fire_blast.mp3`, `transform.mp3`, `growl1.mp3`, `growl2.mp3` | `Audio/Character skills/MUFLUS/` — Bash, Leap fall, Fiery Rampage, Rage, vox 1 and 3 |
+| `public/assets/audio/whoosh.mp3`, `dash.mp3` | `Audio/Character skills/UMA/SHADOWSTEPS/SHADOWSTEP 2.wav` (trimmed), `H4CK/Dash/DASH OK.wav` |
+
+Source: [lambdaclass/curse_of_mirra_assets](https://github.com/lambdaclass/curse_of_mirra_assets),
+by LambdaClass. The repository's README says CC BY 4.0 but its `LICENSE.md`
+is **CC BY-SA 4.0**; the stricter licence is followed here.
+
+**Changes made:** the Muflus FBX was converted to glTF with FBX2glTF; its
+textures, which the FBX points to on the artist's disk, were extracted from
+the packed `Muflus-lp.blend`, reduced to 1024 px and re-encoded as WebP
+(`tools/import-muflus.mjs`). Audio was re-encoded to MP3, loudness-normalised,
+and some clips trimmed or faded. **These adapted files are shared under CC BY-SA
+4.0** (https://creativecommons.org/licenses/by-sa/4.0/). Files in that
+repository credited to third-party libraries (mixkit and sound-effect packs)
+were deliberately not used.
+
 ## Characters (fallback)
 
 Used only if the KayKit fighters fail to load.

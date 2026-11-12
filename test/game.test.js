@@ -457,3 +457,23 @@ test('arenas: pillars deflect the ball, wind bends it, the pool slows fighters',
   const p = cen.byId('balam-striker'); p.pos.set(0, 0, 0);
   cen.step(1 / 60, {}); assert.ok(p.wading && p.moveSpeed < 7 * .7);
 });
+
+test('duel: light blows never lock you in place; stuns cannot chain', async () => {
+  const world = new World({ mode: 'duel', humans: ['balam-striker', 'kuk-striker'], seed: 5 });
+  const a = world.byId('balam-striker'), b = world.byId('kuk-striker');
+  world.ball.pos.set(6, 0.43, 12);
+  a.pos.set(0, 0, 0); b.pos.set(0, 0, 1.5); a.facing = 0; b.facing = Math.PI;
+  world.melee(a, 0, []);
+  assert.equal(b.stun, 0, 'a light blow does not stun');
+  assert.ok(b.flinch > 0, 'it makes you flinch');
+  const z0 = b.pos.z;
+  world.step(1 / 60, { 'balam-striker': { mx: 0, mz: 0 }, 'kuk-striker': { mx: 0, mz: 1 } });
+  assert.ok(b.pos.z > z0, 'you can still move while flinching');
+  // A stun, once over, grants a window where the next stun becomes a flinch.
+  b.stun = 0.01; b.flinch = 0;
+  world.step(1 / 30, {});
+  assert.ok(b.stunGuard > 0);
+  b.pos.set(0, 0, 1.5); a.hitCooldown = 0;
+  world.melee(a, 1, []);
+  assert.equal(b.stun, 0, 'a heavy right after a stun only makes you flinch');
+});

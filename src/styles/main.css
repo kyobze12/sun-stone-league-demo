@@ -354,3 +354,14 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
   .adv-dialog-box p { font-size: 13px; } .recipes { max-height: 46vh; grid-template-columns: repeat(3, 1fr); } .recipe span { display: none; }
 }
 #adv-craft.show { display: flex; }
+
+/* ---------------------------------------------------------------- cinematics */
+#letterbox { position: absolute; inset: 0; pointer-events: none; z-index: 30; }
+#letterbox::before, #letterbox::after { content: ''; position: absolute; left: 0; right: 0; height: 0; background: #000; transition: height .6s cubic-bezier(.6,0,.2,1); }
+#letterbox::before { top: 0; } #letterbox::after { bottom: 0; }
+#letterbox.on::before, #letterbox.on::after { height: 11vh; }
+#cine-title { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); z-index: 31; text-align: center; pointer-events: none; opacity: 0; transition: opacity .6s; display: flex; flex-direction: column; gap: 4px; }
+#cine-title.show { opacity: 1; }
+#cine-title small { font-size: 11px; letter-spacing: .4em; color: var(--gold); text-transform: uppercase; }
+#cine-title strong { font-family: var(--display); font-size: clamp(28px, 6vw, 64px); color: #fff3cf; letter-spacing: .06em; text-shadow: 0 4px 24px rgba(0,0,0,.7); }
+#cine-title em { font-style: normal; font-size: clamp(13px, 2.2vw, 20px); color: #fff3cf; opacity: .85; letter-spacing: .12em; }

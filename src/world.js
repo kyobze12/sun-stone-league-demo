@@ -51,6 +51,9 @@ export class Player {
     this.chainTimer = 0;
     this.hurt = 0;             // brief flash after taking a hit, for presentation
     this.spirit = 0;           // seconds left in nawal (animal spirit) form
+    this.flinch = 0;           // light hit reaction: slowed, but you can still move and guard
+    this.stunGuard = 0;        // brief immunity to being stunned again, so blows cannot lock you
+    this.hitsTaken = 0; this.hitsTakenAt = -9;
     this.blastCooldown = 0;
   }
   get attacks() { return TEAMS[this.team].attacks; }
@@ -351,7 +354,18 @@ export class World {
     const dealt = Math.max(0, Math.round(amount));
     victim.hp = Math.max(0, victim.hp - dealt);
     victim.hurt = .25;
-    if (stun > 0) { victim.stun = Math.max(victim.stun, stun); victim.charge = -1; victim.pendingStrike = null; victim.guard = false; }
+    // Hit reactions. Light blows only make you flinch: you can keep moving and
+    // raise your guard. Bigger blows stun — but never back-to-back: after a
+    // stun, or after four hits in a row, you are briefly immune, so a combo can
+    // always be escaped.
+    if (this.time - victim.hitsTakenAt > 1.2) victim.hitsTaken = 0;
+    if (!blocked) { victim.hitsTaken += 1; victim.hitsTakenAt = this.time; }
+    if (victim.hitsTaken >= 4) { victim.stunGuard = Math.max(victim.stunGuard, 1); victim.hitsTaken = 0; }
+    const lightBlow = kind === 'light' || kind === 'blast' && stun < .45;
+    // A guard break always lands: it is the answer to turtling, and it is slow.
+    if (stun > 0 && kind !== 'guardbreak' && (lightBlow || victim.stunGuard > 0) && victim.hp - Math.round(amount) > 0) {
+      victim.flinch = Math.max(victim.flinch, .3); victim.charge = -1; victim.pendingStrike = null;
+    } else if (stun > 0) { victim.stun = Math.max(victim.stun, stun); victim.charge = -1; victim.pendingStrike = null; victim.guard = false; }
     if (push) { victim.pos.add(push); }
     if (attacker) attacker.meter = Math.min(100, attacker.meter + dealt * DUEL.meterOnHit);
     victim.meter = Math.min(100, victim.meter + dealt * DUEL.meterOnHurt);
@@ -421,10 +435,14 @@ export class World {
     player.tackleCooldown = Math.max(0, player.tackleCooldown - dt);
     player.swingTimer = Math.max(0, player.swingTimer - dt);
     player.wind = Math.max(0, player.wind - dt);
+    player.flinch = Math.max(0, player.flinch - dt);
+    player.stunGuard = Math.max(0, player.stunGuard - dt);
     if (player.stun > 0) {
       player.stun = Math.max(0, player.stun - dt);
       player.charge = -1;
       player.pendingStrike = null;
+      // Coming out of a stun you get a moment to act before another can land.
+      if (player.stun === 0 && player.hp > 0) player.stunGuard = .9;
     } else if (player.dash > 0) {
       player.dash = Math.max(0, player.dash - dt);
       player.pos.addScaledVector(player.dashDir, (TACKLE_DISTANCE / TACKLE_DURATION) * dt);
@@ -435,7 +453,7 @@ export class World {
       const len = Math.hypot(input.mx, input.mz);
       let mx = input.mx, mz = input.mz;
       if (len > 1) { mx /= len; mz /= len; }
-      player.guard = this.duel && !!input.guard && player.charge < 0;
+      player.guard = this.duel && !!input.guard && player.charge < 0;   // allowed while flinching
       if (this.ice) {
         // Cold House: the floor is ice — you build up speed and slide.
         player.iceVel = player.iceVel || new THREE.Vector3();
@@ -443,7 +461,7 @@ export class World {
         player.iceVel.lerp(want, 1 - Math.exp(-1.6 * dt));
         player.pos.addScaledVector(player.iceVel, dt);
       } else if (len > .08) {
-        const chargeSlow = player.charge >= 0 ? .55 : player.guard ? DUEL.guardSpeed : 1;
+        const chargeSlow = (player.charge >= 0 ? .55 : player.guard ? DUEL.guardSpeed : 1) * (player.flinch > 0 ? .55 : 1);
         player.pos.x += mx * player.moveSpeed * chargeSlow * dt;
         player.pos.z += mz * player.moveSpeed * chargeSlow * dt;
         const target = Math.atan2(mx, mz);
@@ -464,7 +482,7 @@ export class World {
       else player.aim = player.facing;
 
       // Charge / release for smash and lob
-      const held = (input.strike || input.lob) && !player.guard;
+      const held = (input.strike || input.lob) && !player.guard && !(player.flinch > 0 && player.charge < 0);
       const kind = input.lob && !input.strike ? 'lob' : (input.lob && input.strike ? player.chargeKind : 'smash');
       if (held && player.charge < 0 && player.hitCooldown <= 0) { player.charge = 0; player.chargeKind = kind; }
       if (player.charge >= 0 && held) player.charge = Math.min(1, player.charge + dt / CHARGE_TIME);
@@ -649,7 +667,7 @@ export class World {
     return {
       t: this.time,
       ball: [b.pos.x, b.pos.y, b.pos.z, b.vel.x, b.vel.y, b.vel.z, b.gravityScale, b.shields.balam, b.shields.kuk, b.lastTouch || ''],
-      players: this.players.map((p) => [p.id, p.pos.x, p.pos.z, p.facing, p.speed, p.stun, p.charge, p.swingTimer, p.wind, p.jaguar ? 1 : 0, p.dash, p.tackleCooldown, p.hp, p.guard ? 1 : 0, p.meter, p.hurt, p.spirit]),
+      players: this.players.map((p) => [p.id, p.pos.x, p.pos.z, p.facing, p.speed, p.stun, p.charge, p.swingTimer, p.wind, p.jaguar ? 1 : 0, p.dash, p.tackleCooldown, p.hp, p.guard ? 1 : 0, p.meter, p.hurt, p.spirit, p.flinch]),
       powerups: this.powerups.map((p) => [p.id, p.kind, p.pos.x, p.pos.z, p.life]),
       litRing: this.litRing,
       moon: this.moonTime,
@@ -662,7 +680,7 @@ export class World {
     b.gravityScale = s.ball[6]; b.shields.balam = s.ball[7]; b.shields.kuk = s.ball[8]; b.lastTouch = s.ball[9] || null;
     for (const row of s.players) {
       const p = this.byId(row[0]); if (!p) continue;
-      p.pos.set(row[1], 0, row[2]); p.facing = row[3]; p.speed = row[4]; p.stun = row[5]; p.charge = row[6]; p.swingTimer = row[7]; p.wind = row[8]; p.jaguar = !!row[9]; p.dash = row[10]; p.tackleCooldown = row[11]; if (row.length > 12) { p.hp = row[12]; p.guard = !!row[13]; p.meter = row[14]; p.hurt = row[15]; p.spirit = row[16] || 0; }
+      p.pos.set(row[1], 0, row[2]); p.facing = row[3]; p.speed = row[4]; p.stun = row[5]; p.charge = row[6]; p.swingTimer = row[7]; p.wind = row[8]; p.jaguar = !!row[9]; p.dash = row[10]; p.tackleCooldown = row[11]; if (row.length > 12) { p.hp = row[12]; p.guard = !!row[13]; p.meter = row[14]; p.hurt = row[15]; p.spirit = row[16] || 0; p.flinch = row[17] || 0; }
     }
     this.powerups = s.powerups.map((row) => ({ id: row[0], kind: row[1], pos: new THREE.Vector3(row[2], 0, row[3]), life: row[4] }));
     this.litRing = s.litRing; this.moonTime = s.moon; this.time = s.t;

@@ -163,6 +163,7 @@ function showMenu() {
   leaveAdventure();
   G.trial = null; applyEnvironment(null); hazardVisuals.reset({ hazards: [] });
   arenaDressing?.dispose(); arenaDressing = null;
+  playMusicFor(null);
   show('menu', true);
   practiceMarker.visible = false;
   $('rotate-hint').style.display = '';
@@ -179,6 +180,7 @@ function showMenu() {
  * team's regalia — unless your pick matches the rivals' look, in which case
  * they change into another fighter so you never face your own costume.
  */
+function lookIdOf(playerId) { return G.looks?.[playerId]; }
 function looksFor(players) {
   const looks = {};
   const mine = G.mode ? G.world.players.filter((p) => G.localIds.includes(p.id)) : [];
@@ -215,7 +217,7 @@ function disposeCharacter(root) {
 function rebuildFighters() {
   for (const fighter of G.fighters.values()) { scene.remove(fighter.character); disposeCharacter(fighter.character); }
   G.fighters.clear();
-  const looks = looksFor(G.world.players);
+  const looks = G.looks = looksFor(G.world.players);
   const { fighters } = spawnRoster(scene, characterSource, G.world.players, looks);
   for (const f of fighters) f.nawal = lookById(looks[f.id]).nawal;
   duelFx.clear();
@@ -254,6 +256,7 @@ function startMode(mode, options = {}) {
   G.world.humanAssistFloor = touch && mode !== 'online' ? .72 : 0;
   G.match = new Match(mode === 'local2p' || mode === 'online' ? 'match' : mode, G.world, G.trial);
   applyEnvironment(G.trial?.env || G.arena.env);
+  playMusicFor(mode);
   hazardVisuals.reset(G.world);
   G.role = mode === 'online' ? (options.guest ? 'guest' : 'host') : 'local';
   G.paused = false; G.timeScale = 1; G.slowmo = 0; G.excitement = 0;
@@ -295,7 +298,21 @@ function startMode(mode, options = {}) {
       : 'Space: blows (hold = heavy) · E: fire blast · R: guard · Q: tackle · V: spirit form when the bar is full';
     G.duelFx = { lagA: 1, lagB: 1 };
   }
-  G.match.countdown = 3;
+  // Cinematic opening: letterbox, a sweeping establishing shot and a title
+  // card while the countdown runs.
+  if (!options.noIntro && mode !== 'practice' && G.role !== 'guest') {
+    const me = G.world.byId(G.localIds[0]);
+    const facing = me ? facingOf(me.id) : 1;
+    cameraRig.startFlyIn(3.8, facing);
+    G.match.countdown = 4.2;
+    const looks = G.looks || {};
+    const rival = G.world.players.find((p) => me && p.team !== me.team);
+    $('cine-sub').textContent = G.trial?.house || G.arena?.name || '';
+    $('cine-main').textContent = G.trial?.title || (mode === 'duel' ? 'Xibalba Duel' : MODES[mode]?.title || '');
+    $('cine-vs').textContent = rival && me ? `${lookById(looks[me.id]).name}  vs  ${lookById(looks[rival.id]).name}` : '';
+    cinematicMoment(3.4, true);
+  } else G.match.countdown = 3;
+  G.match.countdown = Math.max(G.match.countdown, 3);
   show('countdown', true); $('countdown-value').textContent = '3';
   audio.tone(480, .12);
   cameraRig.stopCinematic();
@@ -305,8 +322,25 @@ function startMode(mode, options = {}) {
   updateHUD(true);
 }
 
-document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListener('click', () => {
+// Recorded sound arrives after the first tap (browsers block audio before it).
+let samplesRequested = false;
+function wakeAudio() {
   audio.unlock();
+  if (samplesRequested) return;
+  samplesRequested = true;
+  audio.loadSamples(['hit_heavy', 'impact', 'whoosh', 'dash', 'gong', 'fire_blast', 'transform', 'growl1', 'growl2'])
+    .then(() => audio.loadSamples(['menu', 'match', 'duel', 'fire', 'wind']))
+    .then(() => playMusicFor(G.mode));
+}
+function playMusicFor(mode) {
+  const track = !mode ? 'menu' : mode === 'duel' || G.trial?.base === 'duel' ? 'duel' : mode === 'adventure' ? null : 'match';
+  audio.loop('music', track, track === 'menu' ? .35 : .22);
+  audio.loop('ambience', mode === 'adventure' || G.arena?.env === 'highland' ? 'wind' : mode ? 'fire' : null, mode === 'adventure' ? .35 : .18);
+}
+addEventListener('pointerdown', wakeAudio, { once: true });
+addEventListener('keydown', wakeAudio, { once: true });
+document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListener('click', () => {
+  wakeAudio();
   // On a phone that allows it, starting a game also goes full screen.
   if (touch && document.fullscreenEnabled && !document.fullscreenElement) {
     document.documentElement.requestFullscreen({ navigationUI: 'hide' }).then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
@@ -496,6 +530,7 @@ function startAdventure() {
   show('menu', false);
   G.mode = 'adventure'; G.match = null; G.paused = false;
   adventure.start(G.look);
+  playMusicFor('adventure');
   for (const id of ['touch-controls', 'pause-btn']) $(id).classList.remove('hidden');
   $('touch-controls').classList.toggle('hidden', !touch);
   $('touch-controls').classList.add('adv');
@@ -517,6 +552,19 @@ function adventureTick(dt, frameDt) {
   adventure.update(dt, input, camera);
   if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = (performance.now() / 1000) % 100;
   if (composer) composer.render(); else renderer.render(adventure.scene, camera);
+}
+
+// ------------------------------------------------------------ cinematic moments
+// The letterbox follows the camera: it is on whenever the camera is running a
+// shot of its own (the opening fly-in, a goal replay, a KO orbit) and the
+// title card shows during the fly-in, so both stay in step at any frame rate.
+let letterboxOn = false, titleOn = false;
+function cinematicMoment() { /* kept for call sites; the camera state decides */ }
+function syncLetterbox() {
+  const on = !!G.mode && G.mode !== 'adventure' && cameraRig.inCutscene;
+  const title = on && !!cameraRig.flyIn;
+  if (on !== letterboxOn) { letterboxOn = on; $('letterbox').classList.toggle('on', on); }
+  if (title !== titleOn) { titleOn = title; $('cine-title').classList.toggle('show', title); }
 }
 
 // ------------------------------------------------------------ arena choice
@@ -670,13 +718,14 @@ function present(events) {
       case 'ko': {
         const victim = G.fighters.get(e.victim);
         playMove(victim?.rig, 'death', { hold: true });
-        flash(); callout('K.O.!', 'score'); audio.ring(); audio.crowd(1);
+        flash(); callout('K.O.!', 'score'); audio.gong(); audio.duck(.25, 2); audio.crowd(1);
         G.timeScale = .3; G.slowmo = 1.4; cameraRig.impact(.6);
+        { const v = G.world.byId(e.victim); if (v) { cameraRig.startCinematic(v.pos.clone().setY(1), -facingOf(v.id)); cinematicMoment(2.6); } }
         break;
       }
       case 'blast': {
         const f = G.fighters.get(e.player); playMove(f?.rig, 'blast', { speed: 1.8 });
-        audio.tone(180, .25, 'sawtooth', .06); particles.burst(pos, 0xff7a1a, 14, 4, 3);
+        audio.fireBlast(); particles.burst(pos, 0xff7a1a, 14, 4, 3);
         break;
       }
       case 'blastEnd': particles.burst(pos, 0xffa040, 18, 5, 4); duelFx.drop(e.id); break;
@@ -692,13 +741,13 @@ function present(events) {
         const at = G.world.byId(e.player).pos.clone().setY(1.1);
         particles.burst(at, spirit.glow, 60, 8, 6); particles.burst(at, 0xffffff, 20, 5, 4);
         duelFx.shockwave(at.clone().setY(.08), spirit.glow, 6);
-        flash(); cameraRig.impact(.5); audio.drum(); audio.crowd(.8);
+        flash(); cameraRig.impact(.5); audio.roar(f?.nawal === 'bone' && G.world.byId(e.player) && lookIdOf(e.player) === 'muflus'); audio.crowd(.8); audio.duck(.4, 1.5);
         callout(`NAWAL — ${spirit.name.toUpperCase()}!`, e.team);
         G.hitstop = .15;
         break;
       }
       case 'spiritEnd': { const at = G.world.byId(e.player).pos.clone().setY(1); particles.burst(at, 0xd9b3ff, 24, 5, 4); break; }
-      case 'sunRing': flash(); callout('SUN-STONE FINISHER!', 'score'); audio.ring(); G.timeScale = .35; G.slowmo = .8; break;
+      case 'sunRing': flash(); callout('SUN-STONE FINISHER!', 'score'); audio.ring(); audio.gong(); G.timeScale = .35; G.slowmo = .8; break;
       case 'roundOver': {
         if (e.how === 'time') callout('TIME!', 'score');
         const roundText = !e.team ? 'DRAW' : controlled()?.team === e.team ? `YOU TAKE ROUND ${e.round}` : `RIVAL TAKES ROUND ${e.round}`;
@@ -708,11 +757,13 @@ function present(events) {
       }
       case 'round': {
         for (const f of G.fighters.values()) reviveFighter(f.rig);
+        cameraRig.stopCinematic();
         duelFx.clear();
         callout(`ROUND ${e.round}`, 'score'); show('countdown', true);
         break;
       }
-      case 'whiff': if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4 && (!G.tutorial || G.tutorial.step >= 1)) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
+      case 'whiff': if (e.melee) audio.whoosh();
+        if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4 && (!G.tutorial || G.tutorial.step >= 1)) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
       case 'tackle': playMove(G.fighters.get(e.player)?.rig, 'dash', { speed: 1.4 }); audio.tackle(); if (e.player) particles.burst(G.world.byId(e.player).pos.clone().setY(.6), 0xffffff, 8, 3, 2); break;
       case 'steal': callout('STEAL!', e.team); audio.hit(); particles.burst(pos, 0xffffff, 20, 6, 4); cameraRig.impact(.3); break;
       case 'knockdown': audio.hit(); cameraRig.impact(.2); break;
@@ -731,7 +782,7 @@ function present(events) {
       case 'score': onScore(e); break;
       case 'suddenDeath': callout(pick(CALLOUTS.suddenDeath), 'muted'); audio.drum(); break;
       case 'callout': callout(e.text, e.kind || ''); break;
-      case 'play': if (G.mode === 'duel') callout('FIGHT!', 'score'); show('countdown', false); audio.tone(720, .3, 'triangle', .08); break;
+      case 'play': cameraRig.flyIn = null; if (G.mode === 'duel') callout('FIGHT!', 'score'); show('countdown', false); audio.tone(720, .3, 'triangle', .08); break;
       case 'resume': cameraRig.stopCinematic(); G.timeScale = 1; break;
       case 'ended': finishGame(); break;
       default: break;
@@ -746,6 +797,7 @@ function onDuelHit(e, pos, isMe) {
   if (attacker && (e.kind === 'light' || e.kind === 'finisher' || e.kind === 'heavy' || e.kind === 'super' || e.kind === 'guardbreak')) {
     const p = G.world.byId(e.player);
     const move = e.kind === 'light' ? (p.chain === 2 ? 'punchB' : 'punchA') : e.kind === 'finisher' ? 'kick' : 'spin';
+    audio.whoosh();
     playMove(attacker.rig, move, { speed: e.kind === 'light' ? 1.8 : 1.3 });
   }
   if (e.blocked) {
@@ -760,7 +812,7 @@ function onDuelHit(e, pos, isMe) {
   playMove(victim?.rig, big ? 'hitB' : 'hitA', { speed: 1.6 });
   const color = e.kind === 'blast' ? 0xff7a1a : e.kind === 'super' ? 0xd9b3ff : 0xfff1c8;
   particles.burst(pos, color, 10 + Math.min(40, e.damage * 2), big ? 7 : 4, big ? 5 : 3);
-  audio.hit(); if (big) audio.drum();
+  audio.hit(big); if (big) audio.duck(.5, .6);
   cameraRig.impact(big ? .35 : .1);
   G.hitstop = Math.max(G.hitstop || 0, big ? .1 : .045);
   if (big) duelFx.shockwave(pos.clone().setY(.08), color);
@@ -781,9 +833,10 @@ function onScore(e) {
     particles.burst(ringCenter, TEAMS[team].color, 40, 7, 6);
     cameraRig.impact(.45);
     cameraRig.startCinematic(ringCenter, ringSide);
+    cinematicMoment(2.2);
     G.timeScale = .3; G.slowmo = 1.1;
     goal.light.intensity = 40; goal.halo.material.opacity = 1;
-    audio.ring();
+    audio.ring(); audio.gong(); audio.duck(.3, 1.8);
     audio.crowd(1);
     G.excitement = 1;
     const label = G.mode === 'ringhunt' && e.combo > 1 ? `RING! COMBO ×${Math.min(e.combo, 4)}` : pick(CALLOUTS.ring);
@@ -990,7 +1043,7 @@ function tick() {
 
   if (running && G.role !== 'guest') {
     const m = G.match;
-    if (m.phase === 'countdown') $('countdown-value').textContent = m.countdown > .5 ? Math.ceil(m.countdown) : 'PLAY';
+    if (m.phase === 'countdown') $('countdown-value').textContent = cameraRig.flyIn ? '' : m.countdown > .5 ? Math.ceil(m.countdown) : 'PLAY';
     const worldEvents = m.phase === 'playing' ? G.world.step(dt, collectInputs()) : [];
     const matchEvents = m.update(frameDt * (m.phase === 'goal' ? 1 : G.timeScale), worldEvents);
     const events = [...worldEvents, ...matchEvents].map(wire);
@@ -1065,6 +1118,7 @@ function tick() {
   if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = now % 100;
   if (composer) composer.render(); else renderer.render(scene, camera);
   renderPicker(frameDt);
+  syncLetterbox();
 }
 tick();
 // Debug handle for automated tests and self-hosted sessions.

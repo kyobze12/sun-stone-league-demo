@@ -21,13 +21,14 @@ const GradeShader = {
     vignette: { value: .38 },
     grain: { value: .025 },
     aspect: { value: 1 },
+    bars: { value: 0 },        // cinematic letterbox, 0 = off, 1 = full 2.35:1
   },
   vertexShader: /* glsl */`
     varying vec2 vUv;
     void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: /* glsl */`
     uniform sampler2D tDiffuse;
-    uniform float time, strength, vignette, grain, aspect;
+    uniform float time, strength, vignette, grain, aspect, bars;
     varying vec2 vUv;
     float luma(vec3 c) { return dot(c, vec3(.2126, .7152, .0722)); }
     float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
@@ -51,7 +52,11 @@ const GradeShader = {
       g *= 1. - vignette * smoothstep(.35, 1.15, dot(d, d));
       // Fine animated grain hides banding in the sky and the haze.
       g += (hash(vUv * 917. + time) - .5) * grain;
-      gl_FragColor = vec4(mix(c, g, strength), src.a);
+      vec3 outc = mix(c, g, strength);
+      // Letterbox for cut-scenes: bars sized for a 2.35:1 frame on any screen.
+      float barH = max(0., (1. - aspect / 2.35) * .5) * bars + .055 * bars;
+      outc *= step(barH, vUv.y) * step(vUv.y, 1. - barH);
+      gl_FragColor = vec4(outc, src.a);
     }`,
 };
 

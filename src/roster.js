@@ -11,6 +11,7 @@ export const ROSTER = [
   { id: 'kot',     name: 'Kot',       title: 'Eagle Sorcerer',      blurb: 'Barred plumes and a beaked helm. His nawal is the coyote.', swatch: ['#d6c8ac', '#5c3e26', '#cea248'], gear: 'eagle', nawal: 'coyote' },
   { id: 'sotz',    name: "Kamazotz",  title: 'Death Bat',           blurb: 'The bat of the House of Bats, blood-red and silent.', swatch: ['#34303a', '#801e22', '#a48454'], gear: 'bat', nawal: 'panther' },
   { id: 'vucub',   name: 'Vucub-Kame', title: 'Seven Death',        blurb: 'Sorcerer-lord of Xibalba. His nawal is a tiger from beyond the sea.', swatch: ['#4a1e5a', '#e6dcc0', '#c2402a'], gear: 'skull', nawal: 'shadow' },
+  { id: 'muflus',  name: 'Muflus',    title: 'Ram from Beyond the Sea', blurb: 'A stranger from another world, horned and iron-shod, who came ashore with a spiked club. (Curse of Mirra, CC BY-SA)', swatch: ['#8a3a30', '#c9a26a', '#2a1a16'], gear: null, nawal: 'bone' },
   { id: 'kame',    name: 'Hun-Kame',  title: 'Lord of Xibalba',     blurb: 'One Death, ruler of the underworld court.', swatch: ['#e2d6ba', '#141212', '#467868'], gear: 'skull', nawal: 'bone' },
 ];
 

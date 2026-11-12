@@ -3,6 +3,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
 import { createGradePass } from './cinematic.js';
 import { BALL_RADIUS, POWERUPS, TEAMS, COURT_LENGTH, HIT_MAX_HEIGHT } from './config.js';
 
@@ -40,14 +41,27 @@ export function createRenderer(canvas, quality) {
 export function createComposer(renderer, scene, camera, quality) {
   const q = QUALITY[quality];
   if (!q.bloom) return null;
-  const composer = new EffectComposer(renderer);
+  // Multisampled HDR target: the composer used to render without antialiasing,
+  // which is a large part of why edges looked jagged and boxy.
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const target = new THREE.WebGLRenderTarget(size.x, size.y, { type: THREE.HalfFloatType, samples: quality === 'high' ? 4 : 2 });
+  const composer = new EffectComposer(renderer, target);
   composer.addPass(new RenderPass(scene, camera));
+  // Ambient occlusion grounds characters and props and darkens creases, so
+  // simple shapes read as solid forms instead of flat-lit boxes. High tier only.
+  let ao = null;
+  if (quality === 'high') {
+    ao = new GTAOPass(scene, camera, innerWidth, innerHeight);
+    ao.updateGtaoMaterial({ radius: .6, distanceExponent: 1.5, thickness: 1.2, scale: 1.1, samples: 12 });
+    ao.blendIntensity = .85;
+    composer.addPass(ao);
+  }
   const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), q.bloomStrength, .55, .78);
   composer.addPass(bloom);
   composer.addPass(new OutputPass());
   const grade = createGradePass();
   composer.addPass(grade);
-  composer.userData = { bloom, grade };
+  composer.userData = { bloom, grade, ao };
   return composer;
 }
 
@@ -249,8 +263,20 @@ export class CameraRig {
     const portrait = aspect < 1;
     const short = aspect > 1.9;   // landscape phone: wide, very little height
 
-    if (this.cinematic) {
-      // Slow orbit around the ring after a goal.
+    if (this.flyIn) {
+      // Match intro: sweep from a high establishing shot over the court down
+      // to your shoulder, easing in so it hands over to play without a cut.
+      const f = this.flyIn;
+      f.time += dt;
+      const k = Math.min(1, f.time / f.duration);
+      const e = k * k * (3 - 2 * k);
+      const a = f.angle + (1 - e) * 2.4;
+      const r = 34 - 26 * e, h = 22 - 17 * e;
+      this.position.set(playerPos.x * e + Math.sin(a) * r * (1 - e * .2), h, playerPos.z * e - f.facing * Math.cos(a) * r);
+      this.look.set(playerPos.x * e, 1.5 + (1 - e) * 2.5, playerPos.z * e + f.facing * 4 * e);
+      if (k >= 1) { this.flyIn = null; this.primed = false; }
+    } else if (this.cinematic) {
+      // Slow orbit around the ring after a goal (or a fallen fighter after a KO).
       const c = this.cinematic;
       c.time += dt;
       const angle = c.offset + c.time * .55;
@@ -360,6 +386,9 @@ export class CameraRig {
 
   /** Floor direction the camera faces — controls map to it in a duel. */
   get floorYaw() { return Math.atan2(this.look.x - this.position.x, this.look.z - this.position.z); }
+
+  startFlyIn(duration, facing = 1) { this.flyIn = { time: 0, duration, facing, angle: (Math.random() - .5) * 1.4 }; this.cinematic = null; }
+  get inCutscene() { return !!(this.flyIn || this.cinematic); }
 
   startCinematic(center, side) { this.cinematic = { center: center.clone(), time: 0, side, offset: (Math.random() - .5) * 1.2 }; }
   stopCinematic() { if (this.cinematic) this.cutNext = true; this.cinematic = null; }
