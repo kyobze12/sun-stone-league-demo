@@ -45,6 +45,25 @@ split into one shared library, and each colour atlas repainted into that
 fighter's Maya palette. Headdresses are added in code (`src/roster.js`). The
 spirit beasts (nawal) and fire blasts are built in code (`src/duelfx.js`).
 
+## Props
+
+| File | Source | Licence |
+| --- | --- | --- |
+| `public/assets/props/kaykit-props.glb` | banners, candles, gold chest, coin stacks, pillar, rubble, spike tile from [KayKit Dungeon Remastered](https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0); skulls, skull posts, ribcage, bones, candle shrine, dead tree from [KayKit Halloween Bits](https://github.com/KayKit-Game-Assets/KayKit-Halloween-Bits-1.0), by Kay Lousberg | CC0 1.0 |
+
+Packed by `tools/import-props.mjs`; placed by `src/props.js`.
+
+## Animals
+
+| File | Source | Licence |
+| --- | --- | --- |
+| `public/assets/animals/Fox.glb` | [Khronos glTF Sample Assets — Fox](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/Fox): model by PixelMannequin; rigging and animation © 2014 tomkranis; glTF conversion © 2017 @AsoboStudio and @scurest | **CC-BY 4.0 — attribution required** (credited on the in-game How to Play screen and here) |
+| `public/assets/animals/Parrot.glb`, `Stork.glb` | three.js example models (r163) | see note |
+
+The fox is recoloured as the coyote nawal. The parrot and stork fly as scarlet
+macaws and jabiru storks; like the other three.js example files they carry no
+per-file licence notice, so treat their provenance as unverified.
+
 ## Characters (fallback)
 
 Used only if the KayKit fighters fail to load.

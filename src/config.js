@@ -100,3 +100,17 @@ export const POWERUPS = Object.freeze({
 });
 export const POWERUP_SPAWN_INTERVAL = 11;
 export const POWERUP_LIFETIME = 14;
+
+// Trials of Xibalba. In the Popol Vuh the Hero Twins, Hunahpu and
+// Xbalanque, were summoned to the underworld court and made to pass a night
+// in each of its deadly houses before playing the lords at the ballgame.
+// Each trial bends one of the game's modes with a rule from that house.
+export const TRIALS = Object.freeze([
+  { id: 'dark', house: 'Dark House', title: 'Quequma-ha', story: 'Only darkness inside. The lords gave the twins a torch and cigars that must still be burning at dawn.', goal: 'Thread 4 lit rings in 70 seconds — in the dark.', base: 'ringhunt', duration: 70, goalRings: 4, env: 'dark' },
+  { id: 'razor', house: 'Razor House', title: 'Chayim-ha', story: 'Obsidian blades that move on their own, grinding back and forth.', goal: 'Thread 3 rings in 75 seconds while the blades sweep the court.', base: 'ringhunt', duration: 75, goalRings: 3, hazards: 'blades' },
+  { id: 'cold', house: 'Cold House', title: 'Xuxulim-ha', story: 'Hail and freezing wind. The floor is ice.', goal: 'Defeat Hun-Kame on the ice. One round.', base: 'duel', rounds: 1, rival: 'kame', env: 'cold', ice: true },
+  { id: 'jaguar', house: 'Jaguar House', title: 'Balami-ha', story: 'Full of hungry jaguars. The twins threw them bones to gnaw instead.', goal: 'Defeat a rival who never leaves jaguar form.', base: 'duel', rounds: 1, rival: 'balam', rivalSpirit: true, rivalLevel: 'easy' },
+  { id: 'fire', house: 'Fire House', title: 'Chuluc-ha', story: 'Nothing but fire inside. It burns, but the twins did not.', goal: 'Survive 45 seconds of fire rain — or defeat Vucub-Kame first.', base: 'duel', rounds: 1, rival: 'vucub', hazards: 'fire', duration: 45, survive: true, env: 'fire', rivalLevel: 'easy' },
+  { id: 'bats', house: 'Bat House', title: 'Zotzi-ha', story: 'Home of Kamazotz, the death bat, whose blade took Hunahpu’s head.', goal: 'Defeat Kamazotz in the dark. Best of three.', base: 'duel', rounds: 2, rival: 'sotz', env: 'dark' },
+  { id: 'lords', house: 'The Ballcourt of Xibalba', title: 'Hun-Kame & Vucub-Kame', story: 'The final game against One Death and Seven Death.', goal: 'Beat the lords of the underworld to 9 points.', base: 'match', target: 9, duration: 150, rivals: ['kame', 'vucub'], env: 'dusk' },
+]);

@@ -44,6 +44,7 @@
           <button class="mode-btn" data-mode="practice"><span class="mode-icon">✦</span><strong>Learn to Play</strong><span>Guided practice on an empty court</span></button>
           <button class="mode-btn primary" data-mode="match"><span class="mode-icon">⚔</span><strong>Ballcourt Match</strong><span>2v2 vs AI · first to 15 or 3 minutes</span></button>
           <button class="mode-btn duel" data-mode="duel"><span class="mode-icon">☠</span><strong>Xibalba Duel</strong><span>1v1 fight · fire, spirits, the ball as a weapon</span></button>
+          <button class="mode-btn trials" id="trials-btn" data-mode="trials"><span class="mode-icon">𓂀</span><strong>Trials of Xibalba</strong><span>7 houses of the Popol Vuh · challenges</span></button>
           <button class="mode-btn" data-mode="ringhunt"><span class="mode-icon">◎</span><strong>Ring Hunt</strong><span>75 seconds · chain rings for combos</span></button>
           <button class="mode-btn" data-mode="local2p"><span class="mode-icon">⚑</span><strong>Local 2P</strong><span>Two players, one keyboard</span></button>
           <button class="mode-btn" data-mode="online"><span class="mode-icon">⟐</span><strong>Online 2P</strong><span>Host a room code or join a friend</span></button>
@@ -55,6 +56,17 @@
           <button id="fullscreen-btn" class="link-btn" aria-label="Play full screen">⛶ Full screen</button>
         </div>
         <div id="records" class="records"></div>
+      </div>
+    </div>
+
+    <!-- ===================== TRIALS ===================== -->
+    <div id="trials" class="overlay">
+      <div class="panel wide trials-panel">
+        <div class="eyebrow">THE ROAD TO XIBALBA</div>
+        <h2>Trials of the Underworld</h2>
+        <p class="trials-intro">Summoned by the lords of death, the Hero Twins passed a night in each of Xibalba's houses before the final game. Pass each house to open the next.</p>
+        <div id="trial-list" class="trial-list"></div>
+        <div class="pick-actions"><button id="trials-back" class="secondary">Back</button></div>
       </div>
     </div>
 
@@ -115,6 +127,7 @@
           <div><i style="--c:#ffe36b"></i><strong>Sun Shield</strong> — your back line repels the ball for 8 s</div>
           <div><i style="--c:#c9a7ff"></i><strong>Moon Gravity</strong> — low gravity for everyone, 6 s</div>
         </div>
+        <p class="credits">Fighters &amp; props: KayKit by Kay Lousberg (CC0). Coyote: "Fox" by PixelMannequin, rig &amp; animation by tomkranis, glTF by AsoboStudio &amp; scurest (CC-BY 4.0).</p>
         <button id="howto-close">Got it</button>
       </div>
     </div>
@@ -174,7 +187,7 @@
     <div id="tutorial" class="hidden"><div class="tut-step" id="tut-step"></div><div class="tut-progress" id="tut-progress"></div></div>
 
     <div id="touch-controls" class="hidden">
-      <div id="joystick"><div id="joystick-knob"></div></div>
+      <div id="stick-zone" aria-label="Movement: touch and drag anywhere on the left side"><div id="joystick"><div id="joystick-knob"></div></div></div>
       <div class="touch-buttons">
         <button id="spirit-btn" class="touch-btn small spirit" aria-label="Transform into your animal spirit">NAWAL</button>
         <button id="guard-btn" class="touch-btn small guard" aria-label="Guard (hold)">GUARD</button>

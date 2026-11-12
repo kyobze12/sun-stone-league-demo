@@ -111,34 +111,51 @@ export function setupInput(canvas, camera, getPlayerPos) {
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
   window.addEventListener('mouseup', () => { mouseStrike = false; });
 
-  // Virtual joystick
+  // Floating joystick: put your thumb down anywhere on the left side of the
+  // screen and the stick centres there. A fixed stick made you hunt for it
+  // with your eyes; this one is always under your thumb. A dead zone stops
+  // drift and a gentle curve gives fine control near the centre.
   const joystick = document.getElementById('joystick');
   const knob = document.getElementById('joystick-knob');
-  let stickId = null;
+  const zone = document.getElementById('stick-zone') || joystick;
+  let stickId = null, cx = 0, cy = 0;
+  const home = () => { joystick.style.left = ''; joystick.style.top = ''; joystick.style.bottom = ''; joystick.classList.remove('active'); };
   const updateStick = (event) => {
-    const rect = joystick.getBoundingClientRect();
-    let dx = event.clientX - (rect.left + rect.width / 2);
-    let dy = event.clientY - (rect.top + rect.height / 2);
-    const max = rect.width * .34;
+    const max = joystick.offsetWidth * .38;
+    let dx = event.clientX - cx, dy = event.clientY - cy;
     const distance = Math.hypot(dx, dy);
     if (distance > max) { dx *= max / distance; dy *= max / distance; }
-    touchMove.x = dx / max; touchMove.z = dy / max;
+    const raw = Math.min(1, distance / max);
+    const dead = .14;
+    const mag = raw < dead ? 0 : Math.pow((raw - dead) / (1 - dead), 1.25);
+    const nx = distance > 0 ? dx / Math.max(distance, 1e-6) : 0, ny = distance > 0 ? dy / Math.max(distance, 1e-6) : 0;
+    touchMove.x = nx * mag; touchMove.z = ny * mag;
     knob.style.transform = `translate(${dx}px, ${dy}px)`;
   };
-  joystick.addEventListener('pointerdown', (event) => { if (stickId !== null) return; stickId = event.pointerId; joystick.setPointerCapture(stickId); updateStick(event); });
-  joystick.addEventListener('pointermove', (event) => { if (event.pointerId === stickId) updateStick(event); });
+  zone.addEventListener('pointerdown', (event) => {
+    if (stickId !== null) return;
+    event.preventDefault();
+    stickId = event.pointerId; zone.setPointerCapture(stickId);
+    const size = joystick.offsetWidth;
+    cx = event.clientX; cy = event.clientY;
+    const host = zone.getBoundingClientRect();
+    joystick.style.left = `${cx - host.left - size / 2}px`; joystick.style.top = `${cy - host.top - size / 2}px`; joystick.style.bottom = 'auto';
+    joystick.classList.add('active');
+    updateStick(event);
+  });
+  zone.addEventListener('pointermove', (event) => { if (event.pointerId === stickId) updateStick(event); });
   const releaseStick = (event) => {
     if (event.pointerId !== stickId) return;
-    stickId = null; touchMove.x = 0; touchMove.z = 0; knob.style.transform = 'translate(0, 0)';
+    stickId = null; touchMove.x = 0; touchMove.z = 0; knob.style.transform = 'translate(0, 0)'; home();
   };
   resetStick = () => {
     const captured = stickId; stickId = null; aimId = null;
-    if (captured !== null && joystick.hasPointerCapture(captured)) joystick.releasePointerCapture(captured);
-    knob.style.transform = 'translate(0, 0)';
+    if (captured !== null && zone.hasPointerCapture(captured)) zone.releasePointerCapture(captured);
+    knob.style.transform = 'translate(0, 0)'; home();
   };
-  joystick.addEventListener('lostpointercapture', releaseStick);
-  joystick.addEventListener('pointerup', releaseStick);
-  joystick.addEventListener('pointercancel', releaseStick);
+  zone.addEventListener('lostpointercapture', releaseStick);
+  zone.addEventListener('pointerup', releaseStick);
+  zone.addEventListener('pointercancel', releaseStick);
 
   // Touch buttons (hold-to-charge works because we track down/up)
   for (const [id, key] of [['strike-btn', 'strike'], ['lob-btn', 'lob'], ['tackle-btn', 'tackle'], ['guard-btn', 'guard'], ['spirit-btn', 'spirit']]) {

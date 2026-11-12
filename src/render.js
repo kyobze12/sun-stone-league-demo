@@ -278,7 +278,7 @@ export class CameraRig {
       const distance = portrait ? 8.6 : short ? 7 : 7.4;
       const height = portrait ? 5.4 : short ? 4.1 : 3.9;
       const shoulder = portrait ? 0 : .75 * facing;     // over the right shoulder
-      const anchor = this.player.clone().addScaledVector(this.ballBias, .25);
+      const anchor = this.player.clone().addScaledVector(this.ballBias, .12);
 
       // Keep the lens inside the alley and clear of the goal frames. Near the
       // end wall the camera climbs above the ring and the wall top instead of
@@ -301,8 +301,8 @@ export class CameraRig {
       this.lookTarget.z += facing * (portrait ? 3.5 : short ? 2.5 : 5);
       // Aim lower on short screens so your fighter's feet stay above the controls.
       this.lookTarget.y = (short ? .6 : 1.5) - over * .15;
-      follow(this.position, this.desired, 5.5, dt);
-      follow(this.look, this.lookTarget, 7, dt);
+      follow(this.position, this.desired, 7.5, dt);
+      follow(this.look, this.lookTarget, 9, dt);
     }
 
     this.camera.position.copy(this.position);
@@ -332,10 +332,10 @@ export class CameraRig {
     const target = Math.atan2(dx, dz);
     // Smooth the yaw; swing faster when the rival circles quickly past.
     const turn = Math.atan2(Math.sin(target - this.yaw), Math.cos(target - this.yaw));
-    this.yaw += turn * (1 - Math.exp(-(gap < 2.5 ? 2.5 : 4.5) * dt));
+    this.yaw += turn * (1 - Math.exp(-(gap < 2.5 ? 3.5 : 6) * dt));
     const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
     const back = (portrait ? 6.6 : short ? 5.6 : 5.8) + Math.min(gap, 12) * .3;
-    const shoulder = portrait ? .5 : 1.7;   // off the shoulder, so your fighter never hides the rival
+    const shoulder = portrait ? .4 : 1.05;   // off the shoulder, so your fighter never hides the rival
     const height = (portrait ? 3.6 : 2.9) + Math.min(gap, 12) * .12;
     let x = this.player.x - fx * back - fz * shoulder;
     let z = this.player.z - fz * back + fx * shoulder;
@@ -346,8 +346,8 @@ export class CameraRig {
     this.desired.set(x, height + (overX + overZ) * .8, z);
     const mid = this.player.clone().lerp(rivalPos, .55);
     this.lookTarget.set(mid.x, 1.25, mid.z);
-    follow(this.position, this.desired, 6, dt);
-    follow(this.look, this.lookTarget, 8, dt);
+    follow(this.position, this.desired, 8, dt);
+    follow(this.look, this.lookTarget, 10, dt);
   }
 
   /** Floor direction the camera faces — controls map to it in a duel. */

@@ -173,7 +173,9 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 
 /* ---------------- touch ---------------- */
 #touch-controls { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
-#joystick { position: absolute; left: calc(22px + var(--safe-left)); bottom: calc(26px + var(--safe-bottom)); width: 136px; height: 136px; border-radius: 50%; background: radial-gradient(circle, rgba(244,194,74,.08), rgba(0,0,0,.45)); border: 2px solid rgba(244,194,74,.35); pointer-events: auto; touch-action: none; }
+#stick-zone { position: absolute; left: 0; bottom: 0; width: 46%; top: 22%; pointer-events: auto; touch-action: none; }
+#joystick { position: absolute; left: calc(22px + var(--safe-left)); bottom: calc(26px + var(--safe-bottom)); opacity: .55; transition: opacity .15s; width: 136px; height: 136px; border-radius: 50%; background: radial-gradient(circle, rgba(244,194,74,.08), rgba(0,0,0,.45)); border: 2px solid rgba(244,194,74,.35); pointer-events: none; touch-action: none; }
+#joystick.active { opacity: 1; transition: none; }
 #joystick-knob { position: absolute; left: 50%; top: 50%; width: 58px; height: 58px; margin: -29px 0 0 -29px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #ffe08a, #b86d16); box-shadow: 0 4px 12px rgba(0,0,0,.6); }
 .touch-buttons { position: absolute; right: calc(18px + var(--safe-right)); bottom: calc(22px + var(--safe-bottom)); display: grid; grid-template-columns: 76px 76px; grid-template-rows: 76px 76px; gap: 10px; pointer-events: auto; }
 .touch-btn { border-radius: 50%; font-size: 12px; letter-spacing: .08em; padding: 0; min-height: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
@@ -295,3 +297,21 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 .fs-steps b { color: var(--gold); }
 /* Running as an installed app or in full screen: use every pixel. */
 @media (display-mode: fullscreen), (display-mode: standalone) { #rotate-hint { display: none !important; } }
+
+/* ---------------------------------------------------------------- trials */
+.mode-btn.trials { background: linear-gradient(180deg, #2a1838, #120818); box-shadow: 0 5px 0 #130903, inset 0 0 0 1px rgba(190,140,255,.35); }
+.trials-intro { font-size: 13px; opacity: .85; margin: 4px 0 12px; }
+.trial-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-bottom: 12px; }
+.trial-card { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 10px 12px; min-height: 0; background: linear-gradient(180deg, #2e1a10, #180c06); color: var(--sand); box-shadow: 0 4px 0 #0c0603, inset 0 0 0 1px rgba(244,194,74,.2); }
+.trial-card strong { font-family: var(--display); font-size: 15px; color: #fff3cf; }
+.trial-card em { font-style: normal; font-size: 11px; color: var(--gold); letter-spacing: .08em; text-transform: uppercase; }
+.trial-card span { font-size: 12px; opacity: .85; }
+.trial-card.done { box-shadow: 0 4px 0 #0c0603, inset 0 0 0 2px #7fffc8; }
+.trial-card.done em::after { content: ' ✓ PASSED'; color: #7fffc8; }
+.trial-card[disabled] { opacity: .4; filter: grayscale(.6); }
+@media (max-height: 460px) and (orientation: landscape) {
+  .trial-list { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .trial-card { padding: 6px 8px; } .trial-card span { display: none; } .trials-intro { display: none; }
+}
+
+.credits { font-size: 11px; opacity: .6; margin: 10px 0; }

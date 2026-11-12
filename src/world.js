@@ -64,7 +64,7 @@ export class Player {
  * step(dt, inputs) returns an array of events for the presentation layer.
  */
 export class World {
-  constructor({ mode = 'match', difficulty = 'normal', seed = 1, humans = ['balam-striker'], serveSide = 0 } = {}) {
+  constructor({ mode = 'match', difficulty = 'normal', seed = 1, humans = ['balam-striker'], serveSide = 0, trial = null } = {}) {
     this.mode = mode;
     this.difficulty = difficulty;
     this.seed = seed;
@@ -78,6 +78,11 @@ export class World {
     this.frozen = false;
     this.ringHunt = mode === 'ringhunt';
     this.duel = mode === 'duel';
+    this.trial = trial;
+    this.ice = !!trial?.ice;
+    this.hazards = [];
+    this.hazardTimer = 2;
+    if (trial?.hazards === 'blades') this.hazards = [-9, -3, 3, 9].map((z, i) => ({ type: 'blade', z, x: (i % 2 ? 1 : -1) * 5, dir: i % 2 ? -1 : 1, speed: 3.2 + i * .35, length: 3.4, hits: {} }));
     this.projectiles = [];
     this.nextProjectileId = 1;
     this.litRing = 'north';
@@ -93,7 +98,7 @@ export class World {
         if (mode === 'duel') player.spawn.set(0, 0, -DUEL.spawnZ * sign);
         else player.spawn.set(spec.offset[0] * sign, 0, spec.offset[2] * sign);
         if (player.control === 'ai') {
-          const profile = team === 'kuk' || mode === 'ringhunt' ? DIFFICULTY[difficulty] : DIFFICULTY.normal;
+          const profile = team === 'kuk' && trial?.rivalLevel ? DIFFICULTY[trial.rivalLevel] : team === 'kuk' || mode === 'ringhunt' ? DIFFICULTY[difficulty] : DIFFICULTY.normal;
           // Each AI draws from its own stream. Sharing one generator made the
           // draw order (and so the team listed first) a systematic advantage.
           const rng = mulberry32(seed * 2654435761 + player.index * 40503 + 7);
@@ -172,13 +177,48 @@ export class World {
 
     for (const event of ball.update(dt)) events.push(event);
     if (this.duel) this.duelTick(dt, events);
+    if (this.trial) this.hazardTick(dt, events);
     return events;
+  }
+
+  // ------------------------------------------------------------ trial hazards
+  hazardTick(dt, events) {
+    // Razor House: obsidian blades sweep side to side across the alley.
+    for (const h of this.hazards) {
+      h.x += h.dir * h.speed * dt;
+      if (Math.abs(h.x) > COURT_WIDTH / 2 - 1) { h.x = Math.sign(h.x) * (COURT_WIDTH / 2 - 1); h.dir *= -1; }
+      for (const p of this.players) {
+        if (p.ai && !this.duel) continue;
+        if ((h.hits[p.id] || 0) > this.time) continue;
+        if (Math.abs(p.pos.z - h.z) < .55 && Math.abs(p.pos.x - h.x) < h.length / 2 && p.stun <= 0) {
+          h.hits[p.id] = this.time + 1.2;
+          p.stun = .9; p.charge = -1; p.pendingStrike = null;
+          p.pos.z += Math.sign(p.pos.z - h.z || 1) * 1.2;
+          if (this.duel) this.damage(p, 10, null, events, { kind: 'blade', stun: .9 });
+          events.push({ type: 'hazardHit', player: p, pos: p.pos.clone().setY(1) });
+        }
+      }
+    }
+    // Fire House: fireballs hurled from the walls at the challenger.
+    if (this.trial?.hazards === 'fire' && this.duel) {
+      this.hazardTimer -= dt;
+      if (this.hazardTimer <= 0) {
+        this.hazardTimer = 1.1 + this.random() * .8;
+        const target = this.players.find((p) => !p.ai) || this.players[0];
+        const side = this.random() < .5 ? -1 : 1;
+        const from = new THREE.Vector3(side * (COURT_WIDTH / 2 + .3), 1.25, target.pos.z + (this.random() - .5) * 10);
+        const dir = target.pos.clone().setY(1.25).sub(from).normalize();
+        this.projectiles.push({ id: this.nextProjectileId++, owner: 'hazard', team: null, power: .6, damage: 6, pos: from, vel: dir.multiplyScalar(12), life: 2 });
+        events.push({ type: 'hazardFire', pos: from.clone() });
+      }
+    }
   }
 
   /** Restore both fighters for a new duel round. The Sun meter carries over. */
   resetRound() {
     for (const p of this.players) { p.hp = DUEL.hp; p.stun = 0; p.spirit = 0; p.blastCooldown = 0; }
     this.projectiles.length = 0;
+    for (const p of this.players) if (p.iceVel) p.iceVel.set(0, 0, 0);
     this.resetPositions(0);
   }
 
@@ -209,6 +249,7 @@ export class World {
       p.chainTimer = Math.max(0, p.chainTimer - dt);
       if (p.chainTimer <= 0) p.chain = 0;
       p.blastCooldown = Math.max(0, p.blastCooldown - dt);
+      if (this.trial?.rivalSpirit && p.ai) p.spirit = DUEL.spiritTime;   // Jaguar House: the beast never fades
       if (p.spirit > 0) { p.spirit = Math.max(0, p.spirit - dt); if (p.spirit === 0) events.push({ type: 'spiritEnd', player: p }); }
     }
     // Fire blasts
@@ -351,7 +392,13 @@ export class World {
       let mx = input.mx, mz = input.mz;
       if (len > 1) { mx /= len; mz /= len; }
       player.guard = this.duel && !!input.guard && player.charge < 0;
-      if (len > .08) {
+      if (this.ice) {
+        // Cold House: the floor is ice — you build up speed and slide.
+        player.iceVel = player.iceVel || new THREE.Vector3();
+        const want = new THREE.Vector3(mx, 0, mz).multiplyScalar(len > .08 ? player.moveSpeed : 0);
+        player.iceVel.lerp(want, 1 - Math.exp(-1.6 * dt));
+        player.pos.addScaledVector(player.iceVel, dt);
+      } else if (len > .08) {
         const chargeSlow = player.charge >= 0 ? .55 : player.guard ? DUEL.guardSpeed : 1;
         player.pos.x += mx * player.moveSpeed * chargeSlow * dt;
         player.pos.z += mz * player.moveSpeed * chargeSlow * dt;

@@ -5,10 +5,10 @@
 import * as THREE from 'three';
 
 export const ROSTER = [
-  { id: 'balam',   name: 'Balam',     title: 'Jaguar Warrior',      blurb: 'Gold pelt and jade. The night sun in a warrior’s body.', swatch: ['#c68e3a', '#2d6e60', '#2c1c10'], gear: 'jaguar' },
+  { id: 'balam',   name: 'Balam',     title: 'Jaguar Warrior',      blurb: 'Gold pelt and jade. The night sun in a warrior’s body.', swatch: ['#c68e3a', '#2d6e60', '#2c1c10'], gear: 'jaguar', nawal: 'jaguar' },
   { id: 'kuk',     name: "K'uk'",     title: 'Quetzal Warrior',     blurb: 'Plumes of the sacred quetzal, worth more than gold.', swatch: ['#2e8070', '#c49c50', '#963c34'], gear: 'quetzal', nawal: 'jade' },
-  { id: 'hunahpu', name: 'Hunahpu',   title: 'Hero Twin',           blurb: 'Ballplayer of the Popol Vuh who beat the lords of Xibalba.', swatch: ['#b03024', '#e8dcc4', '#18100e'], gear: 'twin', nawal: 'fire' },
-  { id: 'kot',     name: 'Kot',       title: 'Eagle Sorcerer',      blurb: 'Barred plumes and a beaked helm. His nawal is a tiger.', swatch: ['#d6c8ac', '#5c3e26', '#cea248'], gear: 'eagle', nawal: 'tiger' },
+  { id: 'hunahpu', name: 'Hunahpu',   title: 'Hero Twin',           blurb: 'Ballplayer of the Popol Vuh who beat the lords of Xibalba. His nawal: a tiger from beyond the sea.', swatch: ['#b03024', '#e8dcc4', '#18100e'], gear: 'twin', nawal: 'tiger' },
+  { id: 'kot',     name: 'Kot',       title: 'Eagle Sorcerer',      blurb: 'Barred plumes and a beaked helm. His nawal is the coyote.', swatch: ['#d6c8ac', '#5c3e26', '#cea248'], gear: 'eagle', nawal: 'coyote' },
   { id: 'sotz',    name: "Kamazotz",  title: 'Death Bat',           blurb: 'The bat of the House of Bats, blood-red and silent.', swatch: ['#34303a', '#801e22', '#a48454'], gear: 'bat', nawal: 'panther' },
   { id: 'vucub',   name: 'Vucub-Kame', title: 'Seven Death',        blurb: 'Sorcerer-lord of Xibalba. His nawal is a tiger from beyond the sea.', swatch: ['#4a1e5a', '#e6dcc0', '#c2402a'], gear: 'skull', nawal: 'shadow' },
   { id: 'kame',    name: 'Hun-Kame',  title: 'Lord of Xibalba',     blurb: 'One Death, ruler of the underworld court.', swatch: ['#e2d6ba', '#141212', '#467868'], gear: 'skull', nawal: 'bone' },

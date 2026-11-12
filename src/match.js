@@ -6,9 +6,12 @@ import { ringFor } from './ball.js';
  * hunt combos and the goal/reset flow. Produces presentation events.
  */
 export class Match {
-  constructor(mode, world) {
+  constructor(mode, world, trial = null) {
     this.mode = mode;
-    this.def = MODES[mode];
+    this.trial = trial;
+    const base = MODES[mode];
+    // A trial reshapes the mode's clock and goal.
+    this.def = trial ? { ...base, duration: trial.duration ?? base.duration, target: trial.rounds ?? trial.target ?? base.target } : base;
     this.world = world;
     this.score = { balam: 0, kuk: 0 };
     this.timeLeft = this.def.duration;
@@ -61,7 +64,7 @@ export class Match {
     if (this.timed) {
       this.timeLeft = Math.max(0, this.timeLeft - dt);
       if (this.timeLeft === 0) {
-        if (this.mode === 'ringhunt') return this.finish(events, 'balam');
+        if (this.mode === 'ringhunt') return this.finish(events, this.trial?.goalRings ? 'kuk' : 'balam');
         if (this.score.balam !== this.score.kuk) return this.finish(events, this.score.balam > this.score.kuk ? 'balam' : 'kuk');
         if (!this.suddenDeath) { this.suddenDeath = true; events.push({ type: 'suddenDeath' }); }
       }
@@ -106,6 +109,7 @@ export class Match {
     }
     if (this.timeLeft === 0) {
       const [a, b] = world.players;
+      if (this.trial?.survive) return this.roundOver(a.hp > 0 ? a.team : b.team, 'time', events);
       const winner = a.hp === b.hp ? null : (a.hp > b.hp ? a.team : b.team);
       return this.roundOver(winner, 'time', events);
     }
@@ -138,6 +142,7 @@ export class Match {
       world.litRing = world.litRing === 'north' ? 'south' : 'north';
       this.serveSide = 0;
       this.goal({ team: 'balam', points, kind: 'ring', combo: this.combo }, events);
+      if (this.trial?.goalRings && this.rings >= this.trial.goalRings) { this.winner = 'balam'; }
       return;
     }
     if (this.mode === 'practice') {

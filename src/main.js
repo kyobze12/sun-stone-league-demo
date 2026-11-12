@@ -7,13 +7,15 @@ import { ROSTER, DEFAULT_LOOK, lookById, savedLook, saveLook } from './roster.js
 import { loadFighters, playMove, reviveFighter } from './fighters.js';
 import { DuelFx, NAWAL } from './duelfx.js';
 import { addAtmosphere } from './atmosphere.js';
+import { loadWildlife, addFlocks } from './wildlife.js';
+import { loadProps, addProps } from './props.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
 import { setupInput, readInput, resetInput, isTouch } from './input.js';
 import { World, EMPTY_INPUT } from './world.js';
 import { Match } from './match.js';
 import { NetSession } from './net.js';
 import { mayaNumeralSVG, CALLOUTS, pick } from './maya.js';
-import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE, DUEL } from './config.js';
+import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE, DUEL, TRIALS } from './config.js';
 import { RINGS, GRAVITY, BALL_RADIUS } from './ball.js';
 import { Audio } from './audio.js';
 
@@ -71,6 +73,7 @@ manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Ma
 let arena = null, goals = [], crowd = [], idolMixers = [];
 let cinematics = null;
 let atmosphere = null;
+let flocks = null;
 const strikeBtn = document.getElementById('strike-btn');
 let characterSource = null;
 (async () => {
@@ -84,7 +87,9 @@ let characterSource = null;
   try { atmosphere = addAtmosphere(scene, arena, lights.sun.position, quality); } catch (error) { console.warn('[sun-stone-league] atmosphere skipped:', error); }
   const missing = [];
   // The KayKit fighters are the cast; the older single mesh is only a fallback.
-  const fighters = await loadFighters(manager).catch(() => false);
+  const [fighters] = await Promise.all([loadFighters(manager).catch(() => false), loadWildlife(manager).catch(() => 0), loadProps(manager).catch(() => 0)]);
+  try { flocks = addFlocks(scene, quality); } catch { /* birds are optional */ }
+  try { addProps(scene); } catch (error) { console.warn('[sun-stone-league] props skipped:', error); }
   if (!fighters) {
     try { await loadSkins(manager); } catch { missing.push('skins'); }
     try { await loadAnimations(manager); } catch { missing.push('animations'); }
@@ -150,7 +155,9 @@ function showMenu() {
   G.mode = null; G.paused = false;
   resetInput();
   for (const id of ['hud', 'status-strip', 'touch-controls', 'pause-btn', 'hint', 'tutorial']) $(id).classList.add('hidden');
-  for (const id of ['endscreen', 'pause-screen', 'countdown', 'online', 'howto']) show(id, false);
+  for (const id of ['endscreen', 'pause-screen', 'countdown', 'online', 'howto', 'trials']) show(id, false);
+  $('duel-hud').classList.add('hidden');
+  G.trial = null; applyEnvironment(null); hazardVisuals.reset({ hazards: [] });
   show('menu', true);
   practiceMarker.visible = false;
   $('rotate-hint').style.display = '';
@@ -177,6 +184,7 @@ function looksFor(players) {
     if (mine.length && p.id === mine[0].id) { looks[p.id] = G.look; continue; }
     let look = DEFAULT_LOOK[p.team];
     if (myTeam && p.team !== myTeam && look === G.look) look = spare[0] || look;
+    if (G.trial && p.team !== myTeam) look = G.trial.rival || (G.trial.rivals ? G.trial.rivals[p.slot === 'keeper' ? 1 : 0] : look);
     looks[p.id] = look;
   }
   return looks;
@@ -232,9 +240,12 @@ function startMode(mode, options = {}) {
   const difficulty = $('difficulty').value;
   const humans = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? ['balam-striker', 'kuk-striker'] : ['balam-striker'];
   G.localIds = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? [options.guest ? 'kuk-striker' : 'balam-striker'] : ['balam-striker'];
-  G.world = new World({ mode: mode === 'local2p' || mode === 'online' ? 'match' : mode, difficulty, seed: options.seed ?? (Date.now() & 0xffff), humans });
+  G.trial = options.trial || null;
+  G.world = new World({ mode: mode === 'local2p' || mode === 'online' ? 'match' : mode, difficulty, seed: options.seed ?? (Date.now() & 0xffff), humans, trial: G.trial });
   G.world.humanAssistFloor = touch && mode !== 'online' ? .72 : 0;
-  G.match = new Match(mode === 'local2p' || mode === 'online' ? 'match' : mode, G.world);
+  G.match = new Match(mode === 'local2p' || mode === 'online' ? 'match' : mode, G.world, G.trial);
+  applyEnvironment(G.trial?.env);
+  hazardVisuals.reset(G.world);
   G.role = mode === 'online' ? (options.guest ? 'guest' : 'host') : 'local';
   G.paused = false; G.timeScale = 1; G.slowmo = 0; G.excitement = 0;
   G.guest.snapshots.length = 0;
@@ -293,9 +304,10 @@ document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListen
   }
   const mode = button.dataset.mode;
   if (mode === 'online') { show('menu', false); show('online', true); $('online-status').textContent = ''; return; }
+  if (mode === 'trials') { openTrials(); return; }
   startMode(mode);
 }));
-$('restart-btn').addEventListener('click', () => { if (G.role === 'guest') { showMenu(); return; } startMode(G.mode); if (G.role === 'host') sendStart(); });
+$('restart-btn').addEventListener('click', () => { if (G.role === 'guest') { showMenu(); return; } if (G.trial) { startTrial(G.nextTrial || G.trial); return; } startMode(G.mode); if (G.role === 'host') sendStart(); });
 $('menu-btn').addEventListener('click', showMenu);
 $('quit-btn').addEventListener('click', showMenu);
 // ------------------------------------------------------------ fighter select
@@ -405,6 +417,57 @@ for (const id of ['fullscreen-btn', 'fullscreen-btn-2']) $(id).addEventListener(
 if (standalone) { $('fullscreen-btn').style.display = 'none'; $('fullscreen-btn-2').style.display = 'none'; }
 $('fs-help-close').addEventListener('click', () => show('fs-help', false));
 document.addEventListener('fullscreenchange', () => setTimeout(onResize, 60));
+// ------------------------------------------------------------ trials of Xibalba
+function trialProgress() { try { return new Set(JSON.parse(localStorage.getItem('ssl-trials') || '[]')); } catch { return new Set(); } }
+function saveTrialProgress(set) { try { localStorage.setItem('ssl-trials', JSON.stringify([...set])); } catch { /* private mode */ } }
+function openTrials() {
+  const done = trialProgress();
+  $('trial-list').innerHTML = TRIALS.map((t, i) => {
+    const open = i === 0 || done.has(TRIALS[i - 1].id) || done.has(t.id);
+    return `<button class="trial-card ${done.has(t.id) ? 'done' : ''}" data-trial="${t.id}" ${open ? '' : 'disabled'}><em>${i + 1}. ${t.house}</em><strong>${t.title}</strong><span>${t.goal}</span></button>`;
+  }).join('');
+  $('trial-list').querySelectorAll('.trial-card').forEach((card) => card.addEventListener('click', () => startTrial(TRIALS.find((t) => t.id === card.dataset.trial))));
+  show('menu', false); show('trials', true);
+}
+function startTrial(trial) {
+  show('trials', false);
+  G.nextTrial = null;
+  startMode(trial.base, { trial });
+  callout(trial.house.toUpperCase(), 'score');
+  $('hint').textContent = `${trial.story} — ${trial.goal}`;
+}
+$('trials-back').addEventListener('click', () => { show('trials', false); show('menu', true); });
+
+// Each house changes the light: night, ice, fire, or the dusk of the final game.
+const ENV_DEFAULT = { fog: scene.fog.color.getHex(), density: scene.fog.density, sun: lights.sun.intensity, sunColor: lights.sun.color.getHex(), fill: lights.fill.intensity, exposure: renderer.toneMappingExposure };
+function applyEnvironment(env) {
+  const e = { ...ENV_DEFAULT };
+  if (env === 'dark') Object.assign(e, { fog: 0x0c0812, density: .045, sun: .12, fill: .12, exposure: ENV_DEFAULT.exposure * .8 });
+  if (env === 'cold') Object.assign(e, { fog: 0xbcd4e6, density: .03, sun: 1.4, sunColor: 0xcfe4ff, fill: .7 });
+  if (env === 'fire') Object.assign(e, { fog: 0x5a1c08, density: .028, sun: 1.6, sunColor: 0xff6a2a, fill: .3 });
+  if (env === 'dusk') Object.assign(e, { fog: 0x4a2a3a, density: .016, sun: 1.3, sunColor: 0xff8a5a, fill: .3 });
+  scene.fog.color.setHex(e.fog); scene.fog.density = e.density;
+  lights.sun.intensity = e.sun; lights.sun.color.setHex(e.sunColor); lights.fill.intensity = e.fill;
+  renderer.toneMappingExposure = e.exposure;
+  scene.environmentIntensity = env === 'dark' ? .08 : env ? .3 : .45;
+}
+
+// Razor House blades: obsidian slabs that follow the simulation's hazards.
+const hazardVisuals = {
+  meshes: [],
+  reset(world) {
+    for (const m of this.meshes) { scene.remove(m); m.geometry.dispose(); }
+    this.meshes = [];
+    const mat = new THREE.MeshStandardMaterial({ color: 0x14101a, roughness: .15, metalness: .6, emissive: 0x3a0a2a, emissiveIntensity: .6 });
+    for (const h of world.hazards) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(h.length, .9, .12), mat);
+      m.position.set(h.x, .55, h.z); m.castShadow = true; scene.add(m); this.meshes.push(m);
+    }
+  },
+  sync(world, time) {
+    world.hazards.forEach((h, i) => { const m = this.meshes[i]; if (m) { m.position.x = h.x; m.rotation.y = Math.sin(time * 6 + i) * .08; } });
+  },
+};
 $('howto-btn').addEventListener('click', () => { show('menu', false); show('howto', true); });
 $('howto-close').addEventListener('click', () => { show('howto', false); if (!G.mode) show('menu', true); });
 $('quality').addEventListener('change', (event) => { localStorage.setItem('ssl-quality', event.target.value); location.reload(); });
@@ -557,6 +620,8 @@ function present(events) {
       }
       case 'blastEnd': particles.burst(pos, 0xffa040, 18, 5, 4); duelFx.drop(e.id); break;
       case 'blastBall': audio.tone(300, .12, 'square', .05); break;
+      case 'hazardHit': particles.burst(pos, 0xd070ff, 18, 5, 4); audio.hit(); cameraRig.impact(.25); if (isMe) callout('OBSIDIAN!', 'muted'); break;
+      case 'hazardFire': audio.tone(140, .2, 'sawtooth', .04); break;
       case 'transform': {
         const f = G.fighters.get(e.player);
         const spirit = NAWAL[f?.nawal] || NAWAL.jaguar;
@@ -694,6 +759,17 @@ function finishGame(reason) {
     $('end-mode').textContent = 'RING HUNT COMPLETE'; $('end-title').textContent = `${m.score.balam} POINTS`;
     $('end-sub').textContent = m.score.balam >= best && m.score.balam > 0 ? 'New best — your name is carved into the sun-stone.' : `Best: ${best}`;
     $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['BEST COMBO', stats.longestCombo], ['STRIKES', stats.strikes]]);
+  } else if (G.trial) {
+    const winner = m.winner || (m.score.balam > m.score.kuk ? 'balam' : 'kuk');
+    const passed = winner === 'balam';
+    const index = TRIALS.indexOf(G.trial);
+    if (passed) { const done = trialProgress(); done.add(G.trial.id); saveTrialProgress(done); }
+    $('end-mode').textContent = G.trial.house.toUpperCase();
+    $('end-title').textContent = passed ? 'TRIAL PASSED' : 'THE HOUSE PREVAILS';
+    const next = TRIALS[index + 1];
+    $('end-sub').textContent = passed ? (next ? `The way opens to the ${next.house}.` : 'The lords of Xibalba are defeated. The twins rise as the sun and the moon.') : 'Try the house again.';
+    $('end-stats').innerHTML = statHTML(G.trial.base === 'ringhunt' ? [['RINGS', m.rings], ['GOAL', G.trial.goalRings], ['STRIKES', stats.strikes]] : [['HITS', stats.hits ?? 0], ['RINGS', stats.rings], ['ROUNDS', `${m.score.balam}–${m.score.kuk}`]]);
+    G.nextTrial = passed && next ? next : null;
   } else if (G.mode === 'practice' || reason === 'practice') {
     $('end-mode').textContent = 'PRACTICE COMPLETE'; $('end-title').textContent = 'READY FOR THE COURT';
     $('end-sub').textContent = 'You know the moves. Take on a Ballcourt Match.';
@@ -708,7 +784,7 @@ function finishGame(reason) {
     $('end-sub').textContent = `Balam ${m.score.balam} — ${m.score.kuk} K'uk'`;
     $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['STRIKES', stats.strikes], ['TACKLES', stats.tackles]]);
   }
-  $('restart-btn').textContent = G.role === 'guest' ? 'Back to menu' : 'Play Again';
+  $('restart-btn').textContent = G.role === 'guest' ? 'Back to menu' : G.trial ? (G.nextTrial ? 'Next Trial' : 'Try Again') : 'Play Again';
   audio.drum();
 }
 
@@ -780,7 +856,7 @@ function hostNetwork(dt, events) {
 }
 function guestNetwork() {
   if (!G.net?.conn) return;
-  const input = readInput('p1', { facing: facingOf(controlledId()), yaw: G.mode === 'duel' ? cameraRig.floorYaw : null, touch, arrowsAsP1: true });
+  const input = readInput('p1', { facing: facingOf(controlledId()), yaw: G.mode && G.mode !== 'local2p' ? cameraRig.floorYaw : null, touch, arrowsAsP1: true });
   G.net.send({ t: 'in', i: input });
   G.net.ping();
   const snaps = G.guest.snapshots;
@@ -861,6 +937,7 @@ function tick() {
   if (world) {
     updateBallVisual(ballMesh, world.ball.pos, world.ball.vel, frameDt, world.ball.lastTouch ? TEAMS[world.ball.lastTouch].color : 0xff9b20);
     powerupVisuals.sync(world.powerups, G.elapsed);
+    if (world.hazards?.length) hazardVisuals.sync(world, G.elapsed);
     if (G.mode === 'duel') duelFx.syncBlasts(world.projectiles, frameDt);
     for (const player of world.players) {
       const f = G.fighters.get(player.id); if (!f) continue;
@@ -907,6 +984,7 @@ function tick() {
   const now = performance.now() / 1000;
   cinematics?.update(frameDt, now);
   atmosphere?.update(frameDt, now);
+  flocks?.update(frameDt, now);
   duelFx.updateRings(frameDt);
   if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = now % 100;
   if (composer) composer.render(); else renderer.render(scene, camera);

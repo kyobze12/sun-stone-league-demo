@@ -7,6 +7,7 @@
 // proportions as the KayKit fighters, with a coat painted on a canvas and a
 // glowing aura shell, animated with a procedural gait.
 import * as THREE from 'three';
+import { buildCoyote, animateCoyote, hasCoyote } from './wildlife.js';
 
 // ---------------------------------------------------------------- coats
 export const NAWAL = {
@@ -15,6 +16,7 @@ export const NAWAL = {
   fire:    { name: 'Sun Jaguar',      base: '#ff8a2a', spot: '#7a1a06', pattern: 'rosette', glow: 0xff6a1a },
   tiger:   { name: 'Tiger',           base: '#e8792a', spot: '#140c08', pattern: 'stripes', glow: 0xffa040 },
   panther: { name: 'Shadow Panther',  base: '#1c1622', spot: '#3a2a4a', pattern: 'none',    glow: 0xb070ff },
+  coyote:  { name: 'Coyote',          base: '#c9a072', spot: '#5a3a1e', pattern: 'none',    glow: 0xffc080 },
   bone:    { name: 'Bone Jaguar',     base: '#ece2c8', spot: '#6a5a40', pattern: 'stripes', glow: 0xd8f0ff },
   shadow:  { name: 'Night Tiger',     base: '#3a1a5a', spot: '#0a0410', pattern: 'stripes', glow: 0xd040ff },
 };
@@ -59,42 +61,51 @@ export function buildBeast(kind = 'jaguar') {
   const root = new THREE.Group();
   const body = new THREE.Group(); root.add(body);
   const parts = [];
+  // Smooth, high-segment ellipsoids blended by overlap read as one sculpted
+  // body rather than a stack of primitives.
+  const ell = (rx, ry, rz) => { const g = new THREE.SphereGeometry(1, 32, 22); g.scale(rx, ry, rz); return g; };
   const add = (geo, mat, pos, parent = body, rot = null) => {
     const m = new THREE.Mesh(geo, mat); m.position.set(...pos); if (rot) m.rotation.set(...rot);
     m.castShadow = true; parent.add(m); parts.push(m); return m;
   };
-  // Torso: barrel chest tapering to the hips
-  add(new THREE.CapsuleGeometry(.36, 1.0, 6, 12), skin, [0, 1.0, 0], body, [Math.PI / 2, 0, 0]);
-  add(new THREE.SphereGeometry(.44, 14, 10), skin, [0, 1.05, .45]);
-  // Head
-  const head = new THREE.Group(); head.position.set(0, 1.3, .95); body.add(head);
-  add(new THREE.SphereGeometry(.3, 14, 10), skin, [0, 0, 0], head).scale.set(1.1, .95, 1);
-  add(new THREE.BoxGeometry(.3, .2, .26), skin, [0, -.07, .26], head);              // muzzle
-  add(new THREE.SphereGeometry(.05, 6, 5), dark, [0, -.01, .4], head);                // nose
+  // Torso: deep chest, tucked waist, muscular haunches; a slight dip in the back
+  add(ell(.36, .42, .5), skin, [0, 1.02, .42]);                 // chest
+  add(ell(.3, .32, .5), skin, [0, 1.0, -.05]);                  // belly / waist
+  add(ell(.34, .38, .42), skin, [0, 1.04, -.5]);                // haunches
+  add(ell(.22, .2, .34), skin, [0, 1.3, .62], body, [-.5, 0, 0]);   // shoulders / scruff
+  add(new THREE.CylinderGeometry(.17, .24, .5, 20), skin, [0, 1.28, .78], body, [-1.0, 0, 0]);   // neck
+  // Head: broad skull, heavy cheeks, short muzzle
+  const head = new THREE.Group(); head.position.set(0, 1.42, 1.02); body.add(head);
+  add(ell(.25, .21, .25), skin, [0, 0, 0], head);               // skull
+  for (const s of [-1, 1]) add(ell(.12, .11, .12), skin, [s * .13, -.07, .08], head);   // cheeks
+  add(ell(.13, .1, .14), skin, [0, -.06, .2], head);            // muzzle
+  add(ell(.05, .035, .04), dark, [0, -.01, .33], head);         // nose
   for (const s of [-1, 1]) {
-    add(new THREE.ConeGeometry(.09, .14, 5), skin, [s * .18, .25, -.05], head);       // ears
-    add(new THREE.SphereGeometry(.04, 6, 5), eye, [s * .12, .06, .25], head);          // glowing eyes
+    const ear = add(new THREE.ConeGeometry(.075, .12, 16), skin, [s * .16, .19, -.06], head, [0, 0, -s * .3]);
+    ear.scale.z = .5;
+    add(ell(.035, .025, .02), eye, [s * .1, .04, .2], head);    // glowing eyes
   }
-  const jaw = add(new THREE.BoxGeometry(.24, .07, .22), dark, [0, -.18, .2], head);
-  // Legs: pivot groups at shoulder and hip, two segments each
+  const jaw = add(ell(.1, .04, .1), dark, [0, -.15, .17], head);
+  // Legs: thick upper limbs tapering to slim wrists and broad paws
   const legs = [];
-  for (const [x, z, front] of [[-.24, .55, true], [.24, .55, true], [-.22, -.5, false], [.22, -.5, false]]) {
-    const hip = new THREE.Group(); hip.position.set(x, .95, z); body.add(hip);
-    add(new THREE.CapsuleGeometry(.12, .42, 4, 8), skin, [0, -.3, 0], hip);
-    const knee = new THREE.Group(); knee.position.set(0, -.56, 0); hip.add(knee);
-    add(new THREE.CapsuleGeometry(.09, .32, 4, 8), skin, [0, -.2, 0], knee);
-    add(new THREE.SphereGeometry(.12, 8, 6), skin, [0, -.4, .05], knee).scale.set(1, .6, 1.3);   // paw
+  for (const [x, z, front] of [[-.2, .5, true], [.2, .5, true], [-.2, -.52, false], [.2, -.52, false]]) {
+    const hip = new THREE.Group(); hip.position.set(x, 1.0, z); body.add(hip);
+    add(ell(.14, .32, front ? .16 : .2), skin, [0, -.18, front ? 0 : -.03], hip);
+    const knee = new THREE.Group(); knee.position.set(0, -.48, front ? 0 : -.06); hip.add(knee);
+    add(new THREE.CylinderGeometry(.07, .09, .4, 16), skin, [0, -.2, 0], knee);
+    add(ell(.11, .06, .14), skin, [0, -.42, .05], knee);        // paw
     legs.push({ hip, knee, front, phase: (front ? 0 : Math.PI) + (x < 0 ? 0 : Math.PI * .5) });
   }
-  // Tail: a chain that sways
-  const tail = []; let parent = body; let pos = [0, 1.05, -.68];
-  for (let i = 0; i < 5; i++) {
+  // Tail: a long, tapering chain that curls at the tip
+  const tail = []; let parent = body; let pos = [0, 1.15, -.86];
+  for (let i = 0; i < 9; i++) {
     const seg = new THREE.Group(); seg.position.set(...pos); parent.add(seg);
-    add(new THREE.CapsuleGeometry(.07 - i * .008, .2, 3, 6), i === 4 ? dark : skin, [0, 0, -.14], seg, [Math.PI / 2, 0, 0]);
-    tail.push(seg); parent = seg; pos = [0, 0, -.28];
+    const r = .075 - i * .005;
+    add(new THREE.CylinderGeometry(r * .9, r, .17, 14), i >= 7 ? dark : skin, [0, 0, -.085], seg, [Math.PI / 2, 0, 0]);
+    tail.push(seg); parent = seg; pos = [0, 0, -.17];
   }
   // Aura: an additive back-face shell over the torso and head
-  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(.62, 1.5, 4, 10), aura);
+  const shell = new THREE.Mesh(new THREE.CapsuleGeometry(.6, 1.6, 8, 24), aura);
   shell.rotation.x = Math.PI / 2; shell.position.set(0, 1.05, .15); body.add(shell);
   root.userData = { body, head, jaw, legs, tail, shell, def, gait: 0, lunge: 0, materials: [skin, dark, aura, eye] };
   return root;
@@ -110,11 +121,11 @@ export function animateBeast(beast, dt, speed, attack, time) {
     leg.hip.rotation.x = s * .7 * m - (leg.front ? attack * 1.1 : -attack * .3);
     leg.knee.rotation.x = Math.max(0, -Math.cos(u.gait + leg.phase)) * .9 * m + (leg.front ? attack * .6 : 0);
   }
-  u.body.position.y = Math.abs(Math.sin(u.gait)) * .08 * m + attack * .35;
+  u.body.position.y = Math.abs(Math.sin(u.gait)) * .06 * m + attack * .35 - .1;
   u.body.rotation.x = -attack * .45 + Math.sin(u.gait * 2) * .03 * m;
   u.head.rotation.x = attack * .5;
   u.jaw.position.y = -.18 - attack * .1;
-  u.tail.forEach((seg, i) => { seg.rotation.y = Math.sin(time * 3 + i * .7) * .25; seg.rotation.x = -.15 + i * .06; });
+  u.tail.forEach((seg, i) => { seg.rotation.y = Math.sin(time * 2.6 - i * .5) * .16; seg.rotation.x = (i < 3 ? .12 : -.08) + (i > 6 ? -.25 : 0); });
   u.shell.material.opacity = .2 + Math.sin(time * 6) * .08 + attack * .2;
 }
 
@@ -186,7 +197,8 @@ export class DuelFx {
     let beast = this.beasts.get(fighter.id);
     if (!active && !beast) { if (!fighter.character.visible) fighter.character.visible = true; return; }
     if (active && !beast) {
-      beast = buildBeast(fighter.nawal || 'jaguar');
+      beast = (fighter.nawal === 'coyote' && hasCoyote()) ? buildCoyote(NAWAL.coyote.glow) : buildBeast(fighter.nawal === 'coyote' ? 'jaguar' : (fighter.nawal || 'jaguar'));
+      beast.userData.def = beast.userData.def || NAWAL[fighter.nawal] || NAWAL.jaguar;
       beast.userData.appear = 0;
       this.scene.add(beast); this.beasts.set(fighter.id, beast);
     }
@@ -194,7 +206,7 @@ export class DuelFx {
     if (!active) {
       this.scene.remove(beast);
       beast.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); } });
-      beast.userData.materials.forEach((m) => { m.map?.dispose(); m.dispose(); });
+      (beast.userData.materials || []).forEach((m) => { m.map?.dispose(); m.dispose(); });
       this.beasts.delete(fighter.id);
       fighter.character.visible = true;
       return;
@@ -208,7 +220,8 @@ export class DuelFx {
     const attack = player.swingTimer > 0 ? Math.sin((1 - player.swingTimer / .35) * Math.PI) : 0;
     // Spirit fire streaming off the beast.
     if (Math.random() < .6) this.particles.burst(beast.position.clone().add(new THREE.Vector3((Math.random() - .5) * .8, 1 + Math.random() * .6, (Math.random() - .5) * 1.4)), u.def.glow, 1, .8, 1.2);
-    animateBeast(beast, dt, player.speed, Math.max(0, attack), time);
+    if (u.coyote) animateCoyote(beast, dt, player.speed, Math.max(0, attack));
+    else animateBeast(beast, dt, player.speed, Math.max(0, attack), time);
   }
 
   clear() {
