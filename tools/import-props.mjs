@@ -8,7 +8,9 @@ import { NodeIO, Document } from '@gltf-transform/core';
 import { mergeDocuments, unpartition, dedup, prune } from '@gltf-transform/functions';
 
 const SRC = process.argv[2] || '/tmp/claude-0/props';
-const files = [...fs.readdirSync(path.join(SRC, 'd')).map((f) => path.join(SRC, 'd', f)), ...fs.readdirSync(path.join(SRC, 'h')).filter((f) => f.endsWith('.gltf')).map((f) => path.join(SRC, 'h', f))];
+const OUTNAME = process.argv[3] || 'kaykit-props.glb';
+const dDir = path.join(SRC, 'd');
+const files = [...(fs.existsSync(dDir) ? fs.readdirSync(dDir).map((f) => path.join(dDir, f)) : []), ...fs.readdirSync(path.join(SRC, 'h')).filter((f) => f.endsWith('.gltf')).map((f) => path.join(SRC, 'h', f))];
 const io = new NodeIO();
 const target = new Document();
 const scene = target.createScene('props');
@@ -23,6 +25,6 @@ for (const file of files) {
 }
 for (const s of target.getRoot().listScenes()) if (s !== scene) s.dispose();
 await target.transform(unpartition(), dedup(), prune({ propertyTypes: ['Accessor', 'Mesh', 'Material', 'Texture', 'Node'] }));
-const out = new URL('../public/assets/props/kaykit-props.glb', import.meta.url).pathname;
+const out = new URL(`../public/assets/props/${OUTNAME}`, import.meta.url).pathname;
 await io.write(out, target);
 console.log('wrote', out, (fs.statSync(out).size / 1024).toFixed(0) + ' KB', scene.listChildren().map((n) => n.getName()).join(', '));

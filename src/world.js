@@ -55,7 +55,7 @@ export class Player {
   }
   get attacks() { return TEAMS[this.team].attacks; }
   get ring() { return ringFor(this.attacks).center; }
-  get moveSpeed() { return PLAYER_SPEED * (this.wind > 0 ? 1.45 : 1) * (this.spirit > 0 ? DUEL.spiritSpeed : 1) * (this.ai ? this.ai.profile.speed : 1); }
+  get moveSpeed() { return PLAYER_SPEED * (this.wind > 0 ? 1.45 : 1) * (this.spirit > 0 ? DUEL.spiritSpeed : 1) * (this.wading ? .6 : 1) * (this.speedBuff || 1) * (this.ai ? this.ai.profile.speed : 1); }
   get busy() { return this.stun > 0 || this.dash > 0; }
 }
 
@@ -64,7 +64,7 @@ export class Player {
  * step(dt, inputs) returns an array of events for the presentation layer.
  */
 export class World {
-  constructor({ mode = 'match', difficulty = 'normal', seed = 1, humans = ['balam-striker'], serveSide = 0, trial = null } = {}) {
+  constructor({ mode = 'match', difficulty = 'normal', seed = 1, humans = ['balam-striker'], serveSide = 0, trial = null, arena = null, buffs = null } = {}) {
     this.mode = mode;
     this.difficulty = difficulty;
     this.seed = seed;
@@ -79,6 +79,8 @@ export class World {
     this.ringHunt = mode === 'ringhunt';
     this.duel = mode === 'duel';
     this.trial = trial;
+    this.arena = arena;            // obstacles / wind / pool — see ARENAS
+    this.buffs = buffs;            // crafted equipment carried in from the open world
     this.ice = !!trial?.ice;
     this.hazards = [];
     this.hazardTimer = 2;
@@ -108,6 +110,12 @@ export class World {
       }
     }
     this.resetPositions(serveSide);
+    // Equipment crafted in the open world: only the human side carries it.
+    for (const p of this.players) {
+      p.maxHp = DUEL.hp + (!p.ai && buffs?.hp || 0);
+      p.hp = p.maxHp;
+      if (!p.ai && buffs) { p.meter = buffs.meter || 0; p.speedBuff = 1 + (buffs.speed || 0); p.powerBuff = 1 + (buffs.power || 0); }
+    }
   }
 
   byId(id) { return this.players.find((p) => p.id === id); }
@@ -178,7 +186,43 @@ export class World {
     for (const event of ball.update(dt)) events.push(event);
     if (this.duel) this.duelTick(dt, events);
     if (this.trial) this.hazardTick(dt, events);
+    if (this.arena) this.arenaTick(dt, events);
     return events;
+  }
+
+  // ------------------------------------------------------------ arena features
+  arenaTick(dt, events) {
+    const a = this.arena, ball = this.ball;
+    for (const o of a.obstacles || []) {
+      // Fighters cannot walk through a pillar.
+      for (const p of this.players) {
+        const dx = p.pos.x - o.x, dz = p.pos.z - o.z, d = Math.hypot(dx, dz), min = o.r + PLAYER_RADIUS;
+        if (d < min && d > 1e-4) { p.pos.x = o.x + dx / d * min; p.pos.z = o.z + dz / d * min; }
+      }
+      // The ball glances off it.
+      if (ball.pos.y < 4.2) {
+        const dx = ball.pos.x - o.x, dz = ball.pos.z - o.z, d = Math.hypot(dx, dz), min = o.r + BALL_RADIUS;
+        if (d < min && d > 1e-4) {
+          const nx = dx / d, nz = dz / d, vn = ball.vel.x * nx + ball.vel.z * nz;
+          ball.pos.x = o.x + nx * min; ball.pos.z = o.z + nz * min;
+          if (vn < 0) { ball.vel.x -= 1.8 * vn * nx; ball.vel.z -= 1.8 * vn * nz; events.push({ type: 'pillar', pos: ball.pos.clone() }); }
+        }
+      }
+    }
+    if (a.wind && ball.pos.y > 1.2) {
+      this.windNow = Math.sin(this.time * Math.PI * 2 / a.wind.period) * a.wind.strength;
+      ball.vel.x += this.windNow * dt;
+    }
+    if (a.pool) {
+      const inPool = (pos) => Math.hypot(pos.x - a.pool.x, pos.z - a.pool.z) < a.pool.r;
+      for (const p of this.players) p.wading = inPool(p.pos);
+      if (inPool(ball.pos) && ball.pos.y < BALL_RADIUS + .12) {
+        if (!ball.inPool) events.push({ type: 'splash', pos: ball.pos.clone() });
+        ball.inPool = true;
+        const k = Math.exp(-3.5 * dt); ball.vel.x *= k; ball.vel.z *= k;
+        if (ball.vel.y > 0) ball.vel.y *= .55;
+      } else ball.inPool = false;
+    }
   }
 
   // ------------------------------------------------------------ trial hazards
@@ -216,7 +260,7 @@ export class World {
 
   /** Restore both fighters for a new duel round. The Sun meter carries over. */
   resetRound() {
-    for (const p of this.players) { p.hp = DUEL.hp; p.stun = 0; p.spirit = 0; p.blastCooldown = 0; }
+    for (const p of this.players) { p.hp = p.maxHp || DUEL.hp; p.stun = 0; p.spirit = 0; p.blastCooldown = 0; }
     this.projectiles.length = 0;
     for (const p of this.players) if (p.iceVel) p.iceVel.set(0, 0, 0);
     this.resetPositions(0);
@@ -546,7 +590,7 @@ export class World {
         if (Math.cos(toward - angle) > .6) { angle = toward; ringAssist = 0; }
       }
     }
-    const boost = player.jaguar ? 1.5 : 1;
+    const boost = (player.jaguar ? 1.5 : 1) * (player.powerBuff || 1);
     const velocity = strikeVelocity({ position: ball.pos, angle, power: .45 + .55 * power, kind, ring: this.targetRing(player), assist: ringAssist, boost, gravityScale: ball.gravityScale });
     ball.vel.copy(velocity);
     ball.heldCooldown = .18;

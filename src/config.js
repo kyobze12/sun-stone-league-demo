@@ -114,3 +114,15 @@ export const TRIALS = Object.freeze([
   { id: 'bats', house: 'Bat House', title: 'Zotzi-ha', story: 'Home of Kamazotz, the death bat, whose blade took Hunahpu’s head.', goal: 'Defeat Kamazotz in the dark. Best of three.', base: 'duel', rounds: 2, rival: 'sotz', env: 'dark' },
   { id: 'lords', house: 'The Ballcourt of Xibalba', title: 'Hun-Kame & Vucub-Kame', story: 'The final game against One Death and Seven Death.', goal: 'Beat the lords of the underworld to 9 points.', base: 'match', target: 9, duration: 150, rivals: ['kame', 'vucub'], env: 'dusk' },
 ]);
+
+// Ballcourts. Each plays differently, not just looks different: the Jungle
+// Court's fallen pillars deflect the ball and block runs, the Highland Court
+// has a crosswind that bends every high ball, and the Cenote Court has a
+// sacred pool at centre court that slows fighters and kills the bounce.
+export const ARENAS = Object.freeze({
+  city:     { id: 'city', name: 'Lost City Court', blurb: 'The great ceremonial court. No tricks — only skill.' },
+  jungle:   { id: 'jungle', name: 'Jungle Court', blurb: 'Fallen pillars deflect the ball and block your run.', env: 'jungle',
+              obstacles: [{ x: -3.2, z: -5, r: .75 }, { x: 3.4, z: -1.5, r: .75 }, { x: -2.6, z: 3.5, r: .75 }, { x: 3, z: 7, r: .75 }] },
+  highland: { id: 'highland', name: 'Highland Court', blurb: 'A mountain crosswind bends every high ball.', env: 'highland', wind: { strength: 7.5, period: 9 } },
+  cenote:   { id: 'cenote', name: 'Cenote Court', blurb: 'A sacred pool at centre court slows you and swallows the bounce.', env: 'cenote', pool: { x: 0, z: 0, r: 3.4 } },
+});

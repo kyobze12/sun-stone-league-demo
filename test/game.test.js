@@ -370,3 +370,90 @@ test('duel: AI against AI finishes matches with KOs', () => {
     assert.equal(match.phase, 'ended', 'seed ' + seed);
   }
 });
+
+test('adventure: gather, farm, craft, build, save and the first quests', async () => {
+  const { Adventure, NODE_TYPES } = await import('../src/adventure/state.js');
+  const { NPCS, PLOTS } = await import('../src/adventure/data.js');
+  let now = 1_000_000;
+  const a = new Adventure(null, now);
+  const stand = (x, z, facing = 0) => { a.s.x = x; a.s.z = z; a.s.facing = facing; a.cooldown = 0; };
+  const use = () => { a.cooldown = 0; return a.act(now); };
+  const npc = (id) => NPCS.find((n) => n.id === id);
+  // Meet the elder: the first quest starts.
+  stand(npc('elder').x, npc('elder').z - 1.5);
+  assert.ok(use().some((e) => e.type === 'say' && e.quest));
+  // Chop trees and break rocks until the quest is satisfied.
+  const gather = (type, item, want) => {
+    for (const n of a.world.nodes.filter((n) => n.type === type)) {
+      if (a.has(item, want)) break;
+      stand(n.x, n.z - 1.4, 0);
+      for (let i = 0; i < NODE_TYPES[type].hp; i++) use();
+    }
+    assert.ok(a.has(item, want), `${want} ${item}`);
+  };
+  gather('tree', 'wood', 4); gather('rock', 'stone', 3);
+  stand(npc('elder').x, npc('elder').z - 1.5);
+  const turnIn = use();
+  assert.ok(turnIn.some((e) => e.completed?.id === 'wake'), 'quest turned in');
+  assert.ok(a.has('seed_maize', 4), 'seeds rewarded');
+  // Farm: till, plant, wait, harvest.
+  stand(npc('farmer').x, npc('farmer').z - 1.5); use();
+  for (let c = 0; c < 3; c++) {
+    stand(PLOTS.x0 + c * PLOTS.size + 1, PLOTS.z0 + 1);
+    assert.ok(use().some((e) => e.type === 'till'));
+    assert.ok(use().some((e) => e.type === 'plant'));
+  }
+  now += 41_000;
+  for (let c = 0; c < 3; c++) { stand(PLOTS.x0 + c * PLOTS.size + 1, PLOTS.z0 + 1); assert.ok(use().some((e) => e.type === 'harvest')); }
+  assert.equal(a.s.count.harvested, 3); assert.ok(a.has('maize', 9));
+  // Craft and build.
+  assert.ok(a.craft('tamale').some((e) => e.type === 'craft'));
+  gather('tree', 'wood', 2);
+  assert.ok(a.craft('wall').some((e) => e.type === 'craft'));
+  while (a.held !== 'wall') a.cycle();
+  for (let x = 8; x < 40 && a.target()?.kind !== 'build'; x += 2) stand(x, -9, 0);
+  assert.ok(use().some((e) => e.type === 'place'), 'placed a wall');
+  assert.equal(a.s.builds.length, 1);
+  assert.ok(a.breakPiece().some((e) => e.type === 'break'));
+  // Buffs and save/load round trip.
+  assert.ok(a.matchBuffs().hp >= 25);
+  const again = new Adventure(a.serialize(), now);
+  assert.equal(again.s.quest, a.s.quest); assert.deepEqual(again.s.inv, a.s.inv);
+  // A felled tree comes back.
+  const felled = a.world.nodes.find((n) => !a.alive(n));
+  now += 200_000; a.update(0.016, {}, now);
+  assert.ok(a.alive(felled), 'resources respawn');
+});
+
+test('adventure: fishing and ball-toss mini-games resolve', async () => {
+  const { Adventure } = await import('../src/adventure/state.js');
+  const { PLACES } = await import('../src/adventure/data.js');
+  const a = new Adventure(null, 0);
+  a.s.x = PLACES.dock.x; a.s.z = PLACES.dock.z;
+  a.act(0); assert.ok(a.fishing);
+  let bite = false;
+  for (let i = 0; i < 600 && !bite; i++) bite = a.update(0.016, {}, 0).some((e) => e.type === 'fishBite');
+  assert.ok(bite); a.cooldown = 0; a.act(0);
+  assert.ok(a.has('fish', 1));
+  a.s.x = PLACES.range.x; a.s.z = PLACES.range.z; a.cooldown = 0; a.act(0);
+  assert.ok(a.toss);
+  let ended = null;
+  for (let i = 0; i < 5; i++) { a.toss.t = .5 / (1.1 + i * .22); a.cooldown = 0; ended = a.act(0).find((e) => e.type === 'tossEnd') || ended; }
+  assert.ok(ended?.won, 'perfect timing wins the toss');
+});
+
+test('arenas: pillars deflect the ball, wind bends it, the pool slows fighters', async () => {
+  const { ARENAS } = await import('../src/config.js');
+  const jungle = new World({ mode: 'match', humans: [], seed: 1, arena: ARENAS.jungle });
+  const o = ARENAS.jungle.obstacles[0];
+  jungle.ball.pos.set(o.x - 2, 1, o.z); jungle.ball.vel.set(8, 0, 0); jungle.ball.gravityScale = 0;
+  let hit = false; for (let i = 0; i < 40 && !hit; i++) hit = jungle.step(1 / 60, {}).some((e) => e.type === 'pillar');
+  assert.ok(hit && jungle.ball.vel.x < 0, 'ball bounced off the pillar');
+  const high = new World({ mode: 'match', humans: [], seed: 1, arena: ARENAS.highland });
+  high.ball.pos.set(0, 6, 0); high.ball.vel.set(0, 0, 0); high.time = ARENAS.highland.wind.period / 4;
+  for (let i = 0; i < 20; i++) high.step(1 / 60, {});
+  assert.ok(Math.abs(high.ball.vel.x) > .5, 'wind pushed the ball');
+  const cen = new World({ mode: 'match', humans: ['balam-striker'], seed: 1, arena: ARENAS.cenote });
+  const p = cen.byId('balam-striker'); p.pos.set(0, 0, 0);
+  cen.step(1 / 60, {}); assert.ok(p.wading && p.moveSpeed < 7 * .7);
+});

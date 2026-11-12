@@ -15,7 +15,9 @@ import { World, EMPTY_INPUT } from './world.js';
 import { Match } from './match.js';
 import { NetSession } from './net.js';
 import { mayaNumeralSVG, CALLOUTS, pick } from './maya.js';
-import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE, DUEL, TRIALS } from './config.js';
+import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE, DUEL, TRIALS, ARENAS } from './config.js';
+import { buildArena } from './arenas.js';
+import { AdventureMode } from './adventure/index.js';
 import { RINGS, GRAVITY, BALL_RADIUS } from './ball.js';
 import { Audio } from './audio.js';
 
@@ -73,6 +75,7 @@ manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Ma
 let arena = null, goals = [], crowd = [], idolMixers = [];
 let cinematics = null;
 let atmosphere = null;
+let arenaDressing = null;
 let flocks = null;
 const strikeBtn = document.getElementById('strike-btn');
 let characterSource = null;
@@ -157,7 +160,9 @@ function showMenu() {
   for (const id of ['hud', 'status-strip', 'touch-controls', 'pause-btn', 'hint', 'tutorial']) $(id).classList.add('hidden');
   for (const id of ['endscreen', 'pause-screen', 'countdown', 'online', 'howto', 'trials']) show(id, false);
   $('duel-hud').classList.add('hidden');
+  leaveAdventure();
   G.trial = null; applyEnvironment(null); hazardVisuals.reset({ hazards: [] });
+  arenaDressing?.dispose(); arenaDressing = null;
   show('menu', true);
   practiceMarker.visible = false;
   $('rotate-hint').style.display = '';
@@ -236,15 +241,19 @@ function makeLabel(text, color) {
 
 // ------------------------------------------------------------ starting modes
 function startMode(mode, options = {}) {
+  leaveAdventure();
   G.mode = mode;
+  G.lastOptions = options;
   const difficulty = $('difficulty').value;
   const humans = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? ['balam-striker', 'kuk-striker'] : ['balam-striker'];
   G.localIds = mode === 'local2p' ? ['balam-striker', 'kuk-striker'] : mode === 'online' ? [options.guest ? 'kuk-striker' : 'balam-striker'] : ['balam-striker'];
   G.trial = options.trial || null;
-  G.world = new World({ mode: mode === 'local2p' || mode === 'online' ? 'match' : mode, difficulty, seed: options.seed ?? (Date.now() & 0xffff), humans, trial: G.trial });
+  G.arena = ARENAS[options.arena || G.trial?.arena || (mode === 'online' || mode === 'practice' ? 'city' : G.arenaId)] || ARENAS.city;
+  G.world = new World({ mode: mode === 'local2p' || mode === 'online' ? 'match' : mode, difficulty, seed: options.seed ?? (Date.now() & 0xffff), humans, trial: G.trial, arena: G.arena.id === 'city' ? null : G.arena, buffs: options.buffs || null });
+  arenaDressing?.dispose(); arenaDressing = buildArena(scene, G.arena);
   G.world.humanAssistFloor = touch && mode !== 'online' ? .72 : 0;
   G.match = new Match(mode === 'local2p' || mode === 'online' ? 'match' : mode, G.world, G.trial);
-  applyEnvironment(G.trial?.env);
+  applyEnvironment(G.trial?.env || G.arena.env);
   hazardVisuals.reset(G.world);
   G.role = mode === 'online' ? (options.guest ? 'guest' : 'host') : 'local';
   G.paused = false; G.timeScale = 1; G.slowmo = 0; G.excitement = 0;
@@ -305,10 +314,11 @@ document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListen
   const mode = button.dataset.mode;
   if (mode === 'online') { show('menu', false); show('online', true); $('online-status').textContent = ''; return; }
   if (mode === 'trials') { openTrials(); return; }
+  if (mode === 'adventure') { startAdventure(); return; }
   startMode(mode);
 }));
-$('restart-btn').addEventListener('click', () => { if (G.role === 'guest') { showMenu(); return; } if (G.trial) { startTrial(G.nextTrial || G.trial); return; } startMode(G.mode); if (G.role === 'host') sendStart(); });
-$('menu-btn').addEventListener('click', showMenu);
+$('restart-btn').addEventListener('click', () => { if (G.role === 'guest') { showMenu(); return; } if (G.trial?.fromAdventure) { if (G.advPassed) startAdventure(); else startMode(G.trial.base, G.lastOptions); return; } if (G.trial) { startTrial(G.nextTrial || G.trial); return; } startMode(G.mode); if (G.role === 'host') sendStart(); });
+$('menu-btn').addEventListener('click', () => { if (G.trial?.fromAdventure) startAdventure(); else showMenu(); });
 $('quit-btn').addEventListener('click', showMenu);
 // ------------------------------------------------------------ fighter select
 // A turntable preview drawn into the stage area with a scissored viewport on
@@ -446,10 +456,13 @@ function applyEnvironment(env) {
   if (env === 'cold') Object.assign(e, { fog: 0xbcd4e6, density: .03, sun: 1.4, sunColor: 0xcfe4ff, fill: .7 });
   if (env === 'fire') Object.assign(e, { fog: 0x5a1c08, density: .028, sun: 1.6, sunColor: 0xff6a2a, fill: .3 });
   if (env === 'dusk') Object.assign(e, { fog: 0x4a2a3a, density: .016, sun: 1.3, sunColor: 0xff8a5a, fill: .3 });
+  if (env === 'jungle') Object.assign(e, { fog: 0x86a878, density: .02, sun: 2.1, sunColor: 0xffe9b0, fill: .65 });
+  if (env === 'highland') Object.assign(e, { fog: 0xc8d8ea, density: .009, sun: 2.8, sunColor: 0xffffff, fill: .65 });
+  if (env === 'cenote') Object.assign(e, { fog: 0x061a24, density: .03, sun: .3, sunColor: 0x66ccff, fill: .28, exposure: ENV_DEFAULT.exposure * .95 });
   scene.fog.color.setHex(e.fog); scene.fog.density = e.density;
   lights.sun.intensity = e.sun; lights.sun.color.setHex(e.sunColor); lights.fill.intensity = e.fill;
   renderer.toneMappingExposure = e.exposure;
-  scene.environmentIntensity = env === 'dark' ? .08 : env ? .3 : .45;
+  scene.environmentIntensity = env === 'dark' || env === 'cenote' ? .1 : env === 'jungle' || env === 'highland' ? .45 : env ? .3 : .45;
 }
 
 // Razor House blades: obsidian slabs that follow the simulation's hazards.
@@ -468,6 +481,54 @@ const hazardVisuals = {
     world.hazards.forEach((h, i) => { const m = this.meshes[i]; if (m) { m.position.x = h.x; m.rotation.y = Math.sin(time * 6 + i) * .08; } });
   },
 };
+// ------------------------------------------------------------ The Lost Courts (open world)
+const adventure = new AdventureMode({
+  audio,
+  launchArena(config, questId, buffs) {
+    startMode(config.base, { trial: { ...config, id: questId, fromAdventure: true }, buffs });
+    callout(config.house.toUpperCase(), 'score');
+    $('hint').textContent = `${config.story} — ${config.goal}`;
+  },
+});
+const BUTTON_LABELS = { 'strike-btn': 'STRIKE', 'lob-btn': 'LOB', 'tackle-btn': 'TACKLE', 'guard-btn': 'GUARD' };
+function startAdventure() {
+  showMenu();
+  show('menu', false);
+  G.mode = 'adventure'; G.match = null; G.paused = false;
+  adventure.start(G.look);
+  for (const id of ['touch-controls', 'pause-btn']) $(id).classList.remove('hidden');
+  $('touch-controls').classList.toggle('hidden', !touch);
+  $('touch-controls').classList.add('adv');
+  for (const [id, text] of Object.entries({ 'strike-btn': 'USE', 'lob-btn': 'NEXT', 'tackle-btn': 'CRAFT', 'guard-btn': 'BREAK' })) $(id).textContent = text;
+  strikeBtn.classList.remove('ready');
+  if (!touch) { $('hint').classList.remove('hidden', 'faded'); $('hint').textContent = 'WASD: move · Space: use · E: next item · Q: craft · R: break'; }
+  camera.fov = cameraRig.fovFor(camera.aspect); camera.updateProjectionMatrix();
+  if (composer) composer.passes[0].scene = adventure.scene;
+}
+function leaveAdventure() {
+  if (!adventure.active) return;
+  adventure.stop();
+  $('touch-controls').classList.remove('adv');
+  for (const [id, text] of Object.entries(BUTTON_LABELS)) $(id).textContent = text;
+  if (composer) composer.passes[0].scene = scene;
+}
+function adventureTick(dt, frameDt) {
+  const input = readInput('p1', { yaw: 0, touch, arrowsAsP1: true });
+  adventure.update(dt, input, camera);
+  if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = (performance.now() / 1000) % 100;
+  if (composer) composer.render(); else renderer.render(adventure.scene, camera);
+}
+
+// ------------------------------------------------------------ arena choice
+G.arenaId = (() => { try { const id = localStorage.getItem('ssl-arena'); return ARENAS[id] ? id : 'city'; } catch { return 'city'; } })();
+function refreshArenaButton() { const a = ARENAS[G.arenaId]; $('arena-name').textContent = a.name; $('arena-blurb').textContent = a.blurb; }
+$('arena-btn').addEventListener('click', () => {
+  const ids = Object.keys(ARENAS);
+  G.arenaId = ids[(ids.indexOf(G.arenaId) + 1) % ids.length];
+  try { localStorage.setItem('ssl-arena', G.arenaId); } catch { /* private mode */ }
+  refreshArenaButton();
+});
+refreshArenaButton();
 $('howto-btn').addEventListener('click', () => { show('menu', false); show('howto', true); });
 $('howto-close').addEventListener('click', () => { show('howto', false); if (!G.mode) show('menu', true); });
 $('quality').addEventListener('change', (event) => { localStorage.setItem('ssl-quality', event.target.value); location.reload(); });
@@ -532,7 +593,7 @@ function updateDuelHUD(force) {
   const a = world.byId('balam-striker'), b = world.byId('kuk-striker');
   if (force) for (const k of Object.keys(duelHudCache)) delete duelHudCache[k];
   for (const [p, side] of [[a, 'a'], [b, 'b']]) {
-    const frac = Math.max(0, p.hp / DUEL.hp);
+    const frac = Math.max(0, p.hp / (p.maxHp || DUEL.hp));
     setIf('hp' + side, (v) => { $('hp-' + side).style.transform = `scaleX(${v})`; $('hp-' + side).classList.toggle('low', v < .3); }, frac.toFixed(3));
     setIf('lag' + side, (v) => { $('hp-lag-' + side).style.transform = `scaleX(${v})`; }, frac.toFixed(2));
     setIf('meter' + side, (v) => { $('meter-' + side).style.width = v + '%'; $('meter-' + side).classList.toggle('full', v >= 100); }, Math.round(p.spirit > 0 ? p.spirit / DUEL.spiritTime * 100 : p.meter));
@@ -621,6 +682,8 @@ function present(events) {
       case 'blastEnd': particles.burst(pos, 0xffa040, 18, 5, 4); duelFx.drop(e.id); break;
       case 'blastBall': audio.tone(300, .12, 'square', .05); break;
       case 'hazardHit': particles.burst(pos, 0xd070ff, 18, 5, 4); audio.hit(); cameraRig.impact(.25); if (isMe) callout('OBSIDIAN!', 'muted'); break;
+      case 'pillar': audio.tone(210, .08, 'triangle', .05); particles.burst(pos, 0xcfc6a8, 8, 3, 2); break;
+      case 'splash': audio.tone(520, .18, 'sine', .05); particles.burst(pos, 0x7fe0ff, 22, 4, 4); break;
       case 'hazardFire': audio.tone(140, .2, 'sawtooth', .04); break;
       case 'transform': {
         const f = G.fighters.get(e.player);
@@ -759,6 +822,16 @@ function finishGame(reason) {
     $('end-mode').textContent = 'RING HUNT COMPLETE'; $('end-title').textContent = `${m.score.balam} POINTS`;
     $('end-sub').textContent = m.score.balam >= best && m.score.balam > 0 ? 'New best — your name is carved into the sun-stone.' : `Best: ${best}`;
     $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['BEST COMBO', stats.longestCombo], ['STRIKES', stats.strikes]]);
+  } else if (G.trial?.fromAdventure) {
+    const winner = m.winner || (m.score.balam > m.score.kuk ? 'balam' : 'kuk');
+    const passed = winner === 'balam';
+    G.advPassed = passed;
+    adventure.arenaResult(G.trial.id, passed);
+    $('end-mode').textContent = G.trial.house.toUpperCase();
+    $('end-title').textContent = passed ? 'THE COURT ANSWERS' : 'NOT YET';
+    $('end-sub').textContent = passed ? 'Return to the village and tell them.' : 'The court stays silent. Try again, or go back and prepare — food and gear carry onto the court.';
+    $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['STRIKES', stats.strikes], ['SCORE', `${m.score.balam}–${m.score.kuk}`]]);
+    G.nextTrial = null;
   } else if (G.trial) {
     const winner = m.winner || (m.score.balam > m.score.kuk ? 'balam' : 'kuk');
     const passed = winner === 'balam';
@@ -784,7 +857,8 @@ function finishGame(reason) {
     $('end-sub').textContent = `Balam ${m.score.balam} — ${m.score.kuk} K'uk'`;
     $('end-stats').innerHTML = statHTML([['RINGS', stats.rings], ['STRIKES', stats.strikes], ['TACKLES', stats.tackles]]);
   }
-  $('restart-btn').textContent = G.role === 'guest' ? 'Back to menu' : G.trial ? (G.nextTrial ? 'Next Trial' : 'Try Again') : 'Play Again';
+  $('restart-btn').textContent = G.role === 'guest' ? 'Back to menu' : G.trial?.fromAdventure ? (G.advPassed ? 'Return to the village' : 'Try Again') : G.trial ? (G.nextTrial ? 'Next Trial' : 'Try Again') : 'Play Again';
+  $('menu-btn').textContent = G.trial?.fromAdventure ? 'Back to the village' : 'Choose Mode';
   audio.drum();
 }
 
@@ -856,7 +930,7 @@ function hostNetwork(dt, events) {
 }
 function guestNetwork() {
   if (!G.net?.conn) return;
-  const input = readInput('p1', { facing: facingOf(controlledId()), yaw: G.mode && G.mode !== 'local2p' ? cameraRig.floorYaw : null, touch, arrowsAsP1: true });
+  const input = readInput('p1', { facing: facingOf(controlledId()), yaw: G.mode && G.mode !== 'local2p' && !cameraRig.cinematic ? cameraRig.floorYaw : null, touch, arrowsAsP1: true });
   G.net.send({ t: 'in', i: input });
   G.net.ping();
   const snaps = G.guest.snapshots;
@@ -912,6 +986,7 @@ function tick() {
   const dt = running && !frozen ? frameDt * G.timeScale : 0;
   G.elapsed += dt;
   G.excitement = Math.max(0, G.excitement - frameDt * .35);
+  if (G.mode === 'adventure' && adventure.active) { adventureTick(liveDt, frameDt); return; }
 
   if (running && G.role !== 'guest') {
     const m = G.match;
@@ -984,6 +1059,7 @@ function tick() {
   const now = performance.now() / 1000;
   cinematics?.update(frameDt, now);
   atmosphere?.update(frameDt, now);
+  arenaDressing?.update(frameDt, now, G.world);
   flocks?.update(frameDt, now);
   duelFx.updateRings(frameDt);
   if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = now % 100;
@@ -992,4 +1068,4 @@ function tick() {
 }
 tick();
 // Debug handle for automated tests and self-hosted sessions.
-if (import.meta.env?.DEV || /[?&](debug|peer)=/.test(location.search)) { window.__ssl = G; window.__scene = scene; window.__camera = camera; window.__THREE = THREE; window.__rig = cameraRig; }
+if (import.meta.env?.DEV || /[?&](debug|peer)=/.test(location.search)) { window.__ssl = G; window.__scene = scene; window.__camera = camera; window.__THREE = THREE; window.__rig = cameraRig; window.__adv = adventure; }

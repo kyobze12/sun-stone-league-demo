@@ -40,10 +40,15 @@
           <span class="fighter-text"><small>Your fighter</small><strong id="fighter-name">Balam</strong><em id="fighter-title">Jaguar Warrior</em></span>
           <span class="fighter-change">Change ›</span>
         </button>
+        <button id="arena-btn" class="fighter-btn arena-btn" aria-label="Change ballcourt">
+          <span class="fighter-text"><small>Ballcourt</small><strong id="arena-name">Lost City Court</strong><em id="arena-blurb"></em></span>
+          <span class="fighter-change">Next ›</span>
+        </button>
         <div class="mode-grid">
           <button class="mode-btn" data-mode="practice"><span class="mode-icon">✦</span><strong>Learn to Play</strong><span>Guided practice on an empty court</span></button>
           <button class="mode-btn primary" data-mode="match"><span class="mode-icon">⚔</span><strong>Ballcourt Match</strong><span>2v2 vs AI · first to 15 or 3 minutes</span></button>
           <button class="mode-btn duel" data-mode="duel"><span class="mode-icon">☠</span><strong>Xibalba Duel</strong><span>1v1 fight · fire, spirits, the ball as a weapon</span></button>
+          <button class="mode-btn adventure" data-mode="adventure"><span class="mode-icon">🌴</span><strong>The Lost Courts</strong><span>Story · open world · farm, craft, build</span></button>
           <button class="mode-btn trials" id="trials-btn" data-mode="trials"><span class="mode-icon">𓂀</span><strong>Trials of Xibalba</strong><span>7 houses of the Popol Vuh · challenges</span></button>
           <button class="mode-btn" data-mode="ringhunt"><span class="mode-icon">◎</span><strong>Ring Hunt</strong><span>75 seconds · chain rings for combos</span></button>
           <button class="mode-btn" data-mode="local2p"><span class="mode-icon">⚑</span><strong>Local 2P</strong><span>Two players, one keyboard</span></button>
@@ -174,6 +179,25 @@
         <div class="duel-top"><span class="pips" id="pips-b"></span><span class="duel-name" id="duel-name-b">Rival</span></div>
         <div class="hp"><div class="hp-lag" id="hp-lag-b"></div><div class="hp-fill" id="hp-b"></div></div>
         <div class="meter"><div class="meter-fill" id="meter-b"></div></div>
+      </div>
+    </div>
+
+    <!-- ===================== ADVENTURE (open world) ===================== -->
+    <div id="adv-hud" class="hidden">
+      <div id="adv-quest"><strong id="adv-quest-title"></strong><span id="adv-quest-goal"></span></div>
+      <div id="adv-inv"></div>
+      <div id="adv-holding"><small>HOLDING</small><span id="adv-held">—</span></div>
+      <div id="adv-prompt" class="hidden"></div>
+      <div id="adv-toast"></div>
+      <div id="adv-meter" class="hidden"><div class="adv-meter-zone"></div><div id="adv-meter-mark"></div></div>
+    </div>
+    <div id="adv-dialog" class="hidden">
+      <div class="adv-dialog-box"><strong id="adv-who"></strong><p id="adv-line"></p><em id="adv-reward"></em><button id="adv-next">Next ›</button></div>
+    </div>
+    <div id="adv-craft" class="overlay">
+      <div class="panel wide"><div class="eyebrow">CRAFTING</div><h2>Make something</h2>
+        <div id="adv-recipes" class="recipes"></div>
+        <div class="pick-actions"><button id="adv-craft-close">Close</button><button id="adv-reset" class="secondary">Restart story</button></div>
       </div>
     </div>
 

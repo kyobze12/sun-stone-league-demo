@@ -8,8 +8,11 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 const PROPS = {};
 export async function loadProps(manager) {
-  const gltf = await new GLTFLoader(manager).loadAsync('./assets/props/kaykit-props.glb');
-  for (const node of gltf.scene.children) PROPS[node.name] = node;
+  const loader = new GLTFLoader(manager);
+  // Two packs: court dressing, and the nature / village set for the open world.
+  await Promise.all(['kaykit-props', 'kaykit-world'].map((name) => loader.loadAsync(`./assets/props/${name}.glb`)
+    .then((gltf) => { for (const node of [...gltf.scene.children]) PROPS[node.name] = node; })
+    .catch(() => {})));
   return Object.keys(PROPS).length;
 }
 export const prop = (name) => {

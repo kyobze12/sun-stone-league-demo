@@ -51,7 +51,10 @@ spirit beasts (nawal) and fire blasts are built in code (`src/duelfx.js`).
 | --- | --- | --- |
 | `public/assets/props/kaykit-props.glb` | banners, candles, gold chest, coin stacks, pillar, rubble, spike tile from [KayKit Dungeon Remastered](https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0); skulls, skull posts, ribcage, bones, candle shrine, dead tree from [KayKit Halloween Bits](https://github.com/KayKit-Game-Assets/KayKit-Halloween-Bits-1.0), by Kay Lousberg | CC0 1.0 |
 
-Packed by `tools/import-props.mjs`; placed by `src/props.js`.
+| `public/assets/props/kaykit-world.glb` | trees, stumps, rocks, hills, mountains, clouds, water plants, houses, well, market, grain store, fences, tent, target, crates, sacks, bridge from [KayKit Medieval Hexagon Pack](https://github.com/KayKit-Game-Assets/KayKit-Medieval-Hexagon-Pack-1.0) by Kay Lousberg | CC0 1.0 |
+
+Packed by `tools/import-props.mjs`; placed by `src/props.js`, `src/arenas.js`
+and `src/adventure/view.js`.
 
 ## Animals
 

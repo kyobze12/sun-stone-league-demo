@@ -267,7 +267,7 @@ export class CameraRig {
       follow(this.position, this.desired, 1.2, dt);
       follow(this.look, this.lookTarget, 2, dt);
     } else {
-      if (!this.primed) { this.player.copy(playerPos); this.primed = true; }
+      if (!this.primed || this.cutNext || this.lastFacing !== facing) { this.player.copy(playerPos); this.ballBias.set(0, 0, 0); this.primed = true; }
       follow(this.player, playerPos, 9, dt);
       // Ball pull: horizontal only, capped, and slow — framing should drift
       // toward the play, never twitch with each bounce.
@@ -301,6 +301,14 @@ export class CameraRig {
       this.lookTarget.z += facing * (portrait ? 3.5 : short ? 2.5 : 5);
       // Aim lower on short screens so your fighter's feet stay above the controls.
       this.lookTarget.y = (short ? .6 : 1.5) - over * .15;
+      // After a goal replay, or when Ring Hunt turns you to the other ring,
+      // cut straight to the new view. Easing back while play resumed left the
+      // lens pointing the wrong way for a second — and because the stick is
+      // screen-relative, the controls felt reversed.
+      if (this.cutNext || this.lastFacing !== facing) {
+        this.position.copy(this.desired); this.look.copy(this.lookTarget);
+        this.cutNext = false; this.lastFacing = facing;
+      }
       follow(this.position, this.desired, 7.5, dt);
       follow(this.look, this.lookTarget, 9, dt);
     }
@@ -354,9 +362,9 @@ export class CameraRig {
   get floorYaw() { return Math.atan2(this.look.x - this.position.x, this.look.z - this.position.z); }
 
   startCinematic(center, side) { this.cinematic = { center: center.clone(), time: 0, side, offset: (Math.random() - .5) * 1.2 }; }
-  stopCinematic() { this.cinematic = null; }
+  stopCinematic() { if (this.cinematic) this.cutNext = true; this.cinematic = null; }
   /** Called when a new match starts so the camera does not sweep in from the menu orbit. */
-  snap() { this.primed = false; }
+  snap() { this.primed = false; this.cutNext = true; }
   impact(amount) { this.shake = Math.max(this.shake, amount); this.fovKick = Math.max(this.fovKick, amount * 8); }
 }
 
