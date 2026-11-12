@@ -6,6 +6,7 @@ import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateChar
 import { ROSTER, DEFAULT_LOOK, lookById, savedLook, saveLook } from './roster.js';
 import { loadFighters, playMove, reviveFighter } from './fighters.js';
 import { DuelFx, NAWAL } from './duelfx.js';
+import { addAtmosphere } from './atmosphere.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
 import { setupInput, readInput, resetInput, isTouch } from './input.js';
 import { World, EMPTY_INPUT } from './world.js';
@@ -27,7 +28,7 @@ const canvas = $('game-canvas');
 const renderer = createRenderer(canvas, quality);
 const scene = new THREE.Scene();
 // Very light haze only — the HDRI supplies the sky and the distance cue.
-scene.fog = new THREE.FogExp2(0xe6c79c, .0065);  // matches the sky dome's horizon
+scene.fog = new THREE.FogExp2(0xe6c79c, .0085);  // matches the sky dome's horizon
 const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, .1, 420);
 camera.position.set(0, 7, -16);
 let composer = createComposer(renderer, scene, camera, quality);
@@ -69,6 +70,7 @@ manager.onProgress = (_url, loaded, total) => { $('loadbar').style.width = `${Ma
 // so the materials carry their textures from the first frame.
 let arena = null, goals = [], crowd = [], idolMixers = [];
 let cinematics = null;
+let atmosphere = null;
 const strikeBtn = document.getElementById('strike-btn');
 let characterSource = null;
 (async () => {
@@ -79,6 +81,7 @@ let characterSource = null;
   if (!QUALITY[quality].crowd) for (const mesh of crowd) mesh.visible = false;
   try { addRuins(scene, quality); } catch (error) { console.warn('[sun-stone-league] ruins skipped:', error); }
   cinematics = await addCinematics(scene, lights, quality, manager).catch(() => null);
+  try { atmosphere = addAtmosphere(scene, arena, lights.sun.position, quality); } catch (error) { console.warn('[sun-stone-league] atmosphere skipped:', error); }
   const missing = [];
   // The KayKit fighters are the cast; the older single mesh is only a fallback.
   const fighters = await loadFighters(manager).catch(() => false);
@@ -284,6 +287,10 @@ function startMode(mode, options = {}) {
 
 document.querySelectorAll('.mode-btn').forEach((button) => button.addEventListener('click', () => {
   audio.unlock();
+  // On a phone that allows it, starting a game also goes full screen.
+  if (touch && document.fullscreenEnabled && !document.fullscreenElement) {
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).then(() => screen.orientation?.lock?.('landscape')).catch(() => {});
+  }
   const mode = button.dataset.mode;
   if (mode === 'online') { show('menu', false); show('online', true); $('online-status').textContent = ''; return; }
   startMode(mode);
@@ -366,6 +373,38 @@ refreshFighterButton();
 $('fighter-btn').addEventListener('click', openPicker);
 $('pick-confirm').addEventListener('click', () => closePicker(true));
 $('pick-cancel').addEventListener('click', () => closePicker(false));
+// ------------------------------------------------------------ full screen
+// Real full screen where the browser allows it (Android, iPad, desktop), with
+// the phone locked to landscape. iPhone Safari does not offer full screen to
+// web pages at all, and an embedded page usually cannot ask for it either, so
+// there the button explains the Home Screen route instead: installed from
+// Safari, the game launches with no browser bars (see manifest.webmanifest).
+const standalone = matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches || navigator.standalone;
+async function goFullscreen() {
+  const root = document.documentElement;
+  const request = root.requestFullscreen || root.webkitRequestFullscreen;
+  if (request && (document.fullscreenEnabled || document.webkitFullscreenEnabled)) {
+    try {
+      await request.call(root, { navigationUI: 'hide' });
+      try { await screen.orientation?.lock?.('landscape'); } catch { /* not every device allows a lock */ }
+      setTimeout(onResize, 120);
+      return;
+    } catch { /* fall through to the help sheet */ }
+  }
+  const iPhone = /iPhone|iPod/.test(navigator.userAgent);
+  $('fs-help-text').textContent = iPhone
+    ? 'iPhone doesn\u2019t let web pages go full screen, and this view can\u2019t ask for it. Install the game to your Home Screen instead:'
+    : 'This view can\u2019t switch to full screen. Open the game in your browser, or install it:';
+  show('fs-help', true);
+}
+function toggleFullscreen() {
+  if (document.fullscreenElement || document.webkitFullscreenElement) (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+  else goFullscreen();
+}
+for (const id of ['fullscreen-btn', 'fullscreen-btn-2']) $(id).addEventListener('click', toggleFullscreen);
+if (standalone) { $('fullscreen-btn').style.display = 'none'; $('fullscreen-btn-2').style.display = 'none'; }
+$('fs-help-close').addEventListener('click', () => show('fs-help', false));
+document.addEventListener('fullscreenchange', () => setTimeout(onResize, 60));
 $('howto-btn').addEventListener('click', () => { show('menu', false); show('howto', true); });
 $('howto-close').addEventListener('click', () => { show('howto', false); if (!G.mode) show('menu', true); });
 $('quality').addEventListener('change', (event) => { localStorage.setItem('ssl-quality', event.target.value); location.reload(); });
@@ -524,6 +563,7 @@ function present(events) {
         playMove(f?.rig, 'transform', { speed: 2 });
         const at = G.world.byId(e.player).pos.clone().setY(1.1);
         particles.burst(at, spirit.glow, 60, 8, 6); particles.burst(at, 0xffffff, 20, 5, 4);
+        duelFx.shockwave(at.clone().setY(.08), spirit.glow, 6);
         flash(); cameraRig.impact(.5); audio.drum(); audio.crowd(.8);
         callout(`NAWAL — ${spirit.name.toUpperCase()}!`, e.team);
         G.hitstop = .15;
@@ -595,6 +635,7 @@ function onDuelHit(e, pos, isMe) {
   audio.hit(); if (big) audio.drum();
   cameraRig.impact(big ? .35 : .1);
   G.hitstop = Math.max(G.hitstop || 0, big ? .1 : .045);
+  if (big) duelFx.shockwave(pos.clone().setY(.08), color);
   if (e.kind === 'super') { flash(); callout('NAWAL MAUL!', e.team); }
   else if (e.kind === 'finisher' && (byMe || toMe)) callout(byMe ? 'COMBO!' : 'COMBO TAKEN', e.team);
   else if (e.kind === 'ball' && big) callout('BALL TO THE BODY!', e.team);
@@ -833,6 +874,8 @@ function tick() {
       const camDist = camera.position.distanceTo(f.character.position);
       const me0 = G.world.byId(controlledId());
       if (G.mode === 'duel') duelFx.syncSpirit(f, player, liveDt, G.elapsed);
+      // A teammate standing right at the lens would fill the screen.
+      else f.character.visible = camDist > 2.8 || G.localIds.includes(player.id);
       f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice' && G.mode !== 'duel' && !G.localIds.includes(player.id) && camDist > 9 && !(me0 && player.team === me0.team && G.mode === 'match');
       f.label.material.opacity = Math.min(.85, (camDist - 9) / 4);
     }
@@ -863,6 +906,8 @@ function tick() {
   particles.update(frameDt);
   const now = performance.now() / 1000;
   cinematics?.update(frameDt, now);
+  atmosphere?.update(frameDt, now);
+  duelFx.updateRings(frameDt);
   if (composer?.userData.grade) composer.userData.grade.uniforms.time.value = now % 100;
   if (composer) composer.render(); else renderer.render(scene, camera);
   renderPicker(frameDt);

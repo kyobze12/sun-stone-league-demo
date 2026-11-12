@@ -135,6 +135,23 @@ export class DuelFx {
     this.scene = scene; this.particles = particles;
     this.blasts = new Map();
     this.beasts = new Map();   // fighter id -> beast
+    this.rings = [];
+  }
+
+  /** An expanding ring of light on the floor: heavy blows, transformations. */
+  shockwave(pos, color, radius = 3.2) {
+    const ring = new THREE.Mesh(new THREE.RingGeometry(.6, .85, 40), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: .85, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    ring.rotation.x = -Math.PI / 2; ring.position.copy(pos);
+    ring.userData = { age: 0, life: .45, radius };
+    this.scene.add(ring); this.rings.push(ring);
+  }
+  updateRings(dt) {
+    for (let i = this.rings.length - 1; i >= 0; i--) {
+      const r = this.rings[i], u = r.userData;
+      u.age += dt; const k = u.age / u.life;
+      r.scale.setScalar(1 + k * u.radius); r.material.opacity = .85 * (1 - k);
+      if (k >= 1) { this.scene.remove(r); r.geometry.dispose(); r.material.dispose(); this.rings.splice(i, 1); }
+    }
   }
 
   syncBlasts(projectiles, dt) {
@@ -189,6 +206,8 @@ export class DuelFx {
     beast.rotation.y = player.facing;
     fighter.character.visible = u.appear < .5;     // the warrior dissolves into the beast
     const attack = player.swingTimer > 0 ? Math.sin((1 - player.swingTimer / .35) * Math.PI) : 0;
+    // Spirit fire streaming off the beast.
+    if (Math.random() < .6) this.particles.burst(beast.position.clone().add(new THREE.Vector3((Math.random() - .5) * .8, 1 + Math.random() * .6, (Math.random() - .5) * 1.4)), u.def.glow, 1, .8, 1.2);
     animateBeast(beast, dt, player.speed, Math.max(0, attack), time);
   }
 

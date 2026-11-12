@@ -10,6 +10,8 @@
   <meta name="apple-mobile-web-app-title" content="Sun-Stone League">
   <meta name="description" content="A mythic Maya ballcourt sport. Charge, strike, tackle and thread the sun-stone ring. Play solo, local 2P or online.">
   <title>Sun-Stone League — Maya Ballcourt</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Nunito:wght@500;700;900&display=swap">
   <link rel="stylesheet" href="./src/styles/main.css">
@@ -50,8 +52,23 @@
           <label>Opponent <select id="difficulty"><option value="easy">Novice</option><option value="normal" selected>Warrior</option><option value="hard">Champion</option></select></label>
           <label>Graphics <select id="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
           <button id="howto-btn" class="link-btn">How to play</button>
+          <button id="fullscreen-btn" class="link-btn" aria-label="Play full screen">⛶ Full screen</button>
         </div>
         <div id="records" class="records"></div>
+      </div>
+    </div>
+
+    <!-- ===================== FULL SCREEN HELP ===================== -->
+    <div id="fs-help" class="overlay">
+      <div class="panel compact">
+        <h2>Play full screen</h2>
+        <p id="fs-help-text">This browser can't switch to full screen from inside a page.</p>
+        <ol class="fs-steps">
+          <li>Open the game's web address in <b>Safari</b>.</li>
+          <li>Tap <b>Share</b> <span aria-hidden="true">⎋</span>, then <b>Add to Home Screen</b>.</li>
+          <li>Launch it from the new <b>Sun-Stone</b> icon — it opens full screen, with no browser bars.</li>
+        </ol>
+        <button id="fs-help-close">Got it</button>
       </div>
     </div>
 
@@ -168,7 +185,7 @@
     </div>
 
     <button id="pause-btn" class="hidden" aria-label="Pause game">Ⅱ</button>
-    <div id="pause-screen" class="overlay"><div class="panel compact"><h2>PAUSED</h2><p>The court waits.</p><button id="resume-btn">Resume</button><button id="quit-btn" class="secondary">Quit to menu</button></div></div>
+    <div id="pause-screen" class="overlay"><div class="panel compact"><h2>PAUSED</h2><p>The court waits.</p><button id="resume-btn">Resume</button><button id="fullscreen-btn-2" class="secondary">⛶ Full screen</button><button id="quit-btn" class="secondary">Quit to menu</button></div></div>
 
     <div id="endscreen" class="overlay">
       <div class="panel compact">

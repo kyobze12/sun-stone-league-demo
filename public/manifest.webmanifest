@@ -1,0 +1,15 @@
+{
+  "name": "Sun-Stone League",
+  "short_name": "Sun-Stone",
+  "description": "A mythic Maya ballcourt sport — and the Xibalba Duel.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0d0805",
+  "theme_color": "#0d0805",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

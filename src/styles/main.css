@@ -290,3 +290,8 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
   .duel-name { font-size: 12px; }
   #duel-time { font-size: 20px; }
 }
+
+.fs-steps { text-align: left; margin: 10px 0 16px; padding-left: 22px; line-height: 1.5; font-size: 14px; }
+.fs-steps b { color: var(--gold); }
+/* Running as an installed app or in full screen: use every pixel. */
+@media (display-mode: fullscreen), (display-mode: standalone) { #rotate-hint { display: none !important; } }
