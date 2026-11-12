@@ -34,6 +34,16 @@ try {
         await page.waitForFunction(value=>Number(document.getElementById('center-value').textContent)<Number(value),before,{timeout:10000});
         assert.deepEqual(errors,[],name+' runtime/shader errors');
         console.log(name+' '+orientation+': startup, movement, shaders and pause passed');
+        await page.reload();
+        await page.locator('#loading').waitFor({state:'hidden',timeout:30000});
+        await page.getByRole('button',{name:/2v2 Team Match/}).click();
+        await page.locator('#countdown').waitFor({state:'hidden'});
+        assert.equal(await page.locator('#player-label').textContent(),'Sun Team');
+        assert.equal(await page.locator('#rival-label').textContent(),'Rival Team');
+        assert.equal(await page.locator('#touch-controls').isVisible(),true,'touch controls stay available in 2v2');
+        await page.waitForTimeout(900);
+        assert.deepEqual(errors,[],name+' 2v2 runtime/shader errors');
+        console.log(name+' '+orientation+': 2v2 startup, team HUD and touch controls passed');
         await context.close();
       }
     } finally {await browser.close();}

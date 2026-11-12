@@ -1,139 +1,158 @@
 import * as THREE from 'three';
-import { COURT_WIDTH, COURT_LENGTH, RING_RADIUS, RING_TUBE } from './court.js';
+import { COURT_WIDTH, COURT_LENGTH, RING_RADIUS, RING_TUBE, RING_HEIGHT, RING_INSET, BALL_RADIUS, GRAVITY, RESTITUTION, BACKLINE_MAX_HEIGHT } from './config.js';
 
-export const BALL_RADIUS = .43;
-export const GRAVITY = -17;
-const RESTITUTION = .67;
+export { BALL_RADIUS, GRAVITY };
 
-function glowTexture() {
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  const g = ctx.createRadialGradient(64,64,4,64,64,62);
-  g.addColorStop(0,'rgba(255,245,190,1)');
-  g.addColorStop(.22,'rgba(255,174,38,.85)');
-  g.addColorStop(1,'rgba(255,105,0,0)');
-  ctx.fillStyle = g; ctx.fillRect(0,0,128,128);
-  return new THREE.CanvasTexture(canvas);
-}
-
-export function createBall(scene) {
-  const group = new THREE.Group();
-  const coreMaterial = new THREE.MeshStandardMaterial({ color: 0x31221b, roughness: .58, metalness: .18, emissive: 0xff6500, emissiveIntensity: .08 });
-  const core = new THREE.Mesh(new THREE.IcosahedronGeometry(BALL_RADIUS, 3), coreMaterial);
-  core.castShadow = true;
-  group.add(core);
-  const bands = new THREE.Mesh(new THREE.TorusGeometry(BALL_RADIUS * .82, .035, 7, 30), new THREE.MeshBasicMaterial({ color: 0xf6a52a }));
-  bands.rotation.x = Math.PI / 2; group.add(bands);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTexture(), color: 0xff9b20, transparent: true, opacity: .18, blending: THREE.AdditiveBlending, depthWrite: false }));
-  glow.scale.set(2.2,2.2,1); group.add(glow);
-  const light = new THREE.PointLight(0xff7b19, 0, 7, 2); group.add(light);
-
-  const trailPositions = new Float32Array(24 * 3);
-  const trailGeometry = new THREE.BufferGeometry();
-  trailGeometry.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
-  const trail = new THREE.Line(trailGeometry, new THREE.LineBasicMaterial({ color: 0xffb12e, transparent: true, opacity: .62, blending: THREE.AdditiveBlending }));
-  trail.frustumCulled = false;
-  scene.add(trail);
-  group.userData = { core, glow, light, trail, trailPositions, history: [] };
-  scene.add(group);
-  return group;
-}
-
-export function updateBallVisual(ball, velocity, dt) {
-  const speed = velocity.length();
-  const energy = THREE.MathUtils.smoothstep(speed, 3, 15);
-  ball.userData.core.rotation.x += velocity.z * dt * 1.5;
-  ball.userData.core.rotation.z -= velocity.x * dt * 1.5;
-  ball.userData.core.material.emissiveIntensity = .08 + energy * 1.35;
-  ball.userData.glow.material.opacity = .12 + energy * .6;
-  ball.userData.glow.scale.setScalar(1.5 + energy * 2.1);
-  ball.userData.light.intensity = energy * 22;
-  const history = ball.userData.history;
-  if (speed > 4) history.unshift(ball.position.clone()); else history.unshift(null);
-  if (history.length > 24) history.pop();
-  const points = ball.userData.trailPositions;
-  let last = ball.position;
-  for (let i = 0; i < 24; i += 1) {
-    const point = history[i] || last;
-    points[i*3] = point.x; points[i*3+1] = point.y; points[i*3+2] = point.z;
-    last = point;
-  }
-  ball.userData.trail.geometry.attributes.position.needsUpdate = true;
-  ball.userData.trail.material.opacity = energy * .72;
-}
+// The two rings. Each ring's hole axis is the court's z axis, so a ball scores
+// by flying through the ring along z. `side` is the sign of the end line the
+// ring sits in front of; `defender` is the team that guards it.
+export const RINGS = Object.freeze([
+  { id: 'north', side: 1, defender: 'kuk', center: new THREE.Vector3(0, RING_HEIGHT, COURT_LENGTH / 2 - RING_INSET) },
+  { id: 'south', side: -1, defender: 'balam', center: new THREE.Vector3(0, RING_HEIGHT, -(COURT_LENGTH / 2 - RING_INSET)) },
+]);
+export function ringFor(side) { return RINGS[side > 0 ? 0 : 1]; }
 
 export class BallState {
   constructor() {
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
-    this.heldCooldown = 0;
-    this.previousX = 0;
-    this.justBounced = false;
+    this.gravityScale = 1;
     this.reset();
   }
 
-  reset() {
-    this.pos.set(0, BALL_RADIUS + .35, 0);
-    this.vel.set((Math.random() - .5) * 1.4, 1.6, (Math.random() - .5) * 1.4);
-    this.previousX = this.pos.x;
+  reset(serveSide = 0) {
+    this.pos.set(0, BALL_RADIUS + 2.4, serveSide * 2.5);
+    this.vel.set(0, 0, 0);
+    this.heldCooldown = 0;
+    this.pendingPass = { north: 0, south: 0 };
+    this.scored = false;
+    this.lastTouch = null;      // team id of the last striker
+    this.lastToucher = null;    // player id
+    this.struck = false;        // has anyone struck since the serve
+    this.bounces = 0;           // floor bounces since last strike
+    this.bounceSide = 0;        // which half the last bounce was on
     this.justBounced = false;
-    this.heldCooldown=0; this.pendingPass=0; this.scored=false;
+    this.wallHits = 0;
+    this.shields = { balam: 0, kuk: 0 }; // time left on each team's back line shield
   }
 
-  update(dt,ring) {
-    if(this.scored)return false;
-    const steps=Math.max(1,Math.ceil(dt/(1/120)));
-    for(let i=0;i<steps;i++)if(this.step(dt/steps,ring))return true;
-    return false;
+  /**
+   * Advances the ball. Returns a list of events:
+   *  {type:'ring', side}  - ball passed through the ring on `side`
+   *  {type:'backline', side} - ball touched the end wall on `side`
+   *  {type:'doubleBounce', side} - second floor bounce on `side` half
+   *  {type:'bounce'} / {type:'wall'} / {type:'rim'} - for effects
+   */
+  update(dt) {
+    const events = [];
+    if (this.scored) return events;
+    const steps = Math.max(1, Math.ceil(dt / (1 / 120)));
+    for (let i = 0; i < steps; i += 1) {
+      this.step(dt / steps, events);
+      if (this.scored) break;
+    }
+    return events;
   }
-  step(dt,ring) {
-    const previous=this.pos.clone();
-    this.justBounced=false;
-    this.pos.addScaledVector(this.vel,dt);
-    this.pos.y+=.5*GRAVITY*dt*dt;this.vel.y+=GRAVITY*dt;
-    this.heldCooldown=Math.max(0,this.heldCooldown-dt);
-    if(this.pos.y<BALL_RADIUS) {
-      this.pos.y=BALL_RADIUS;
-      if(this.vel.y<0) {
-        this.justBounced=this.vel.y < -2.2;
-        this.vel.y=Math.abs(this.vel.y)>.8?-this.vel.y*RESTITUTION:0;
+
+  step(dt, events) {
+    const previous = this.pos.clone();
+    const g = GRAVITY * this.gravityScale;
+    this.justBounced = false;
+    this.pos.addScaledVector(this.vel, dt);
+    this.pos.y += .5 * g * dt * dt;
+    this.vel.y += g * dt;
+    this.heldCooldown = Math.max(0, this.heldCooldown - dt);
+    for (const team of ['balam', 'kuk']) this.shields[team] = Math.max(0, this.shields[team] - dt);
+
+    // Floor
+    if (this.pos.y < BALL_RADIUS) {
+      this.pos.y = BALL_RADIUS;
+      if (this.vel.y < 0) {
+        const hard = this.vel.y < -2.2;
+        this.vel.y = Math.abs(this.vel.y) > .8 ? -this.vel.y * RESTITUTION : 0;
+        if (hard) {
+          this.justBounced = true;
+          events.push({ type: 'bounce', speed: -this.vel.y / RESTITUTION });
+          if (this.struck) {
+            const side = Math.sign(this.pos.z) || this.bounceSide || 1;
+            if (this.bounces >= 1 && side === this.bounceSide) {
+              this.bounces = 0;
+              events.push({ type: 'doubleBounce', side });
+            } else {
+              this.bounces = side === this.bounceSide ? this.bounces + 1 : 1;
+              this.bounceSide = side;
+            }
+          }
+        }
       }
-      const drag=Math.exp(-2.5*dt);this.vel.x*=drag;this.vel.z*=drag;
+      const drag = Math.exp(-3 * dt);
+      this.vel.x *= drag; this.vel.z *= drag;
     }
-    const radial=new THREE.Vector3(0,this.pos.y-ring.y,this.pos.z-ring.z);
-    const radius=radial.length();
-    // At the exact centre every point on the torus centreline is equally near.
-    // Clamping the divisor would incorrectly create a solid obstacle in the hole.
-    const closest=radius<1e-8
-      ? new THREE.Vector3(0,RING_RADIUS,0).add(ring)
-      : radial.multiplyScalar(RING_RADIUS/radius).add(ring);
-    const normal=this.pos.clone().sub(closest),separation=normal.length();
-    if(separation<BALL_RADIUS+RING_TUBE) {
-      if(separation<1e-8)normal.set(Math.sign(previous.x-ring.x)||-1,0,0);
-      else normal.multiplyScalar(1/separation);
-      this.pos.copy(closest).addScaledVector(normal,BALL_RADIUS+RING_TUBE+.001);
-      const speed=this.vel.dot(normal);
-      if(speed<0)this.vel.addScaledVector(normal,-(1+RESTITUTION)*speed);
-      this.pendingPass=0;
-    } else {
-      const dx=this.pos.x-previous.x;
-      if(dx && (previous.x-ring.x)*(this.pos.x-ring.x)<=0) {
-        const t=(ring.x-previous.x)/dx;
-        const y=THREE.MathUtils.lerp(previous.y,this.pos.y,t),z=THREE.MathUtils.lerp(previous.z,this.pos.z,t);
-        if(Math.hypot(y-ring.y,z-ring.z)<RING_RADIUS-RING_TUBE-BALL_RADIUS)this.pendingPass=Math.sign(dx);
+
+    // Rings (torus collision + pass detection)
+    for (const ring of RINGS) {
+      const c = ring.center;
+      const radial = new THREE.Vector3(this.pos.x - c.x, this.pos.y - c.y, 0);
+      const radius = radial.length();
+      const closest = radius < 1e-8
+        ? new THREE.Vector3(0, RING_RADIUS, 0).add(c)
+        : radial.multiplyScalar(RING_RADIUS / radius).add(c);
+      const normal = this.pos.clone().sub(closest);
+      const separation = normal.length();
+      if (separation < BALL_RADIUS + RING_TUBE) {
+        if (separation < 1e-8) normal.set(0, 0, Math.sign(previous.z - c.z) || -1);
+        else normal.multiplyScalar(1 / separation);
+        this.pos.copy(closest).addScaledVector(normal, BALL_RADIUS + RING_TUBE + .001);
+        const speed = this.vel.dot(normal);
+        if (speed < 0) { this.vel.addScaledVector(normal, -(1 + RESTITUTION) * speed); events.push({ type: 'rim', pos: this.pos.clone() }); }
+        this.pendingPass[ring.id] = 0;
+      } else {
+        const dz = this.pos.z - previous.z;
+        if (dz && (previous.z - c.z) * (this.pos.z - c.z) <= 0) {
+          const t = (c.z - previous.z) / dz;
+          const x = THREE.MathUtils.lerp(previous.x, this.pos.x, t), y = THREE.MathUtils.lerp(previous.y, this.pos.y, t);
+          if (Math.hypot(x - c.x, y - c.y) < RING_RADIUS - RING_TUBE - BALL_RADIUS * .55) this.pendingPass[ring.id] = Math.sign(dz);
+        }
+        const pending = this.pendingPass[ring.id];
+        if (pending && (this.pos.z - c.z) * pending > BALL_RADIUS + RING_TUBE) {
+          this.scored = true;
+          events.push({ type: 'ring', side: ring.side, ring });
+          return;
+        }
+        if (pending && this.vel.z * pending <= 0) this.pendingPass[ring.id] = 0;
       }
-      if(this.pendingPass && (this.pos.x-ring.x)*this.pendingPass>BALL_RADIUS+RING_TUBE) {
-        this.scored=true;return true;
-      }
-      if(this.pendingPass && this.vel.x*this.pendingPass<=0)this.pendingPass=0;
     }
-    for(const [axis,half] of [['x',COURT_WIDTH/2-BALL_RADIUS],['z',COURT_LENGTH/2-BALL_RADIUS]]) {
-      if(Math.abs(this.pos[axis])>half) {
-        this.pos[axis]=Math.sign(this.pos[axis])*half;this.vel[axis]*=-RESTITUTION;
-        this.justBounced=true;this.pendingPass=0;
+
+    // Side walls
+    const halfW = COURT_WIDTH / 2 - BALL_RADIUS;
+    if (Math.abs(this.pos.x) > halfW) {
+      this.pos.x = Math.sign(this.pos.x) * halfW;
+      this.vel.x *= -RESTITUTION;
+      this.wallHits += 1;
+      events.push({ type: 'wall', pos: this.pos.clone() });
+    }
+    // End lines
+    const halfL = COURT_LENGTH / 2 - BALL_RADIUS;
+    if (Math.abs(this.pos.z) > halfL) {
+      const side = Math.sign(this.pos.z);
+      this.pos.z = side * halfL;
+      const defender = ringFor(side).defender;
+      if (this.shields[defender] > 0) {
+        this.vel.z = -Math.abs(this.vel.z) * side * 1.15 - side * 4;
+        this.vel.y = Math.max(this.vel.y, 3);
+        events.push({ type: 'shield', side, pos: this.pos.clone() });
+      } else if (this.pos.y <= BACKLINE_MAX_HEIGHT) {
+        this.vel.z *= -RESTITUTION;
+        this.scored = true;
+        events.push({ type: 'backline', side });
+        return;
+      } else {
+        // High balls just rebound off the end wall; only low, "playable" balls count.
+        this.vel.z *= -RESTITUTION;
+        this.wallHits += 1;
+        events.push({ type: 'wall', pos: this.pos.clone() });
       }
     }
-    return false;
+    if (this.pos.y > 14) { this.pos.y = 14; this.vel.y = Math.min(this.vel.y, 0); }
   }
 }

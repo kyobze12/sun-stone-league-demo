@@ -5,68 +5,242 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
   <meta name="theme-color" content="#0d0805">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Sun-Stone League">
-  <title>Sun-Stone League — Pok-Ta-Pok</title>
+  <meta name="description" content="A mythic Maya ballcourt sport. Charge, strike, tackle and thread the sun-stone ring. Play solo, local 2P or online.">
+  <title>Sun-Stone League — Maya Ballcourt</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Nunito:wght@500;700;900&display=swap">
   <link rel="stylesheet" href="./src/styles/main.css">
 </head>
 <body>
   <div id="app">
-    <canvas id="game-canvas" tabindex="0" aria-label="Sun-Stone League game court"></canvas>
+    <canvas id="game-canvas" tabindex="0" aria-label="Sun-Stone League ballcourt"></canvas>
+    <div id="vignette"></div>
+    <div id="flash"></div>
 
     <div id="loading">
       <div class="loading-mark">☀</div>
-      <div>ENTERING THE BALLCOURT</div>
+      <div class="loading-title">ENTERING THE BALLCOURT</div>
       <small id="loading-note">Awakening the sun-stone</small>
       <div class="bar-track"><div class="bar-fill" id="loadbar"></div></div>
     </div>
 
+    <!-- ===================== MAIN MENU ===================== -->
     <div id="menu" class="overlay">
+      <div class="panel menu-panel">
+        <div class="eyebrow">A MYTHIC MAYA BALLCOURT SPORT</div>
+        <h1 class="title">SUN-STONE<br>LEAGUE</h1>
+        <p class="tagline">Thread the ring. Hold the line. Two champions and their keepers, one sacred ball.</p>
+        <button id="fighter-btn" class="fighter-btn" aria-label="Choose your fighter">
+          <span class="fighter-swatch" id="fighter-swatch"></span>
+          <span class="fighter-text"><small>Your fighter</small><strong id="fighter-name">Balam</strong><em id="fighter-title">Jaguar Warrior</em></span>
+          <span class="fighter-change">Change ›</span>
+        </button>
+        <button id="arena-btn" class="fighter-btn arena-btn" aria-label="Change ballcourt">
+          <span class="fighter-text"><small>Ballcourt</small><strong id="arena-name">Lost City Court</strong><em id="arena-blurb"></em></span>
+          <span class="fighter-change">Next ›</span>
+        </button>
+        <div class="mode-grid">
+          <button class="mode-btn" data-mode="practice"><span class="mode-icon">✦</span><strong>Learn to Play</strong><span>Guided practice on an empty court</span></button>
+          <button class="mode-btn primary" data-mode="match"><span class="mode-icon">⚔</span><strong>Ballcourt Match</strong><span>2v2 vs AI · first to 15 or 3 minutes</span></button>
+          <button class="mode-btn duel" data-mode="duel"><span class="mode-icon">☠</span><strong>Xibalba Duel</strong><span>1v1 fight · fire, spirits, the ball as a weapon</span></button>
+          <button class="mode-btn adventure" data-mode="adventure"><span class="mode-icon">🌴</span><strong>The Lost Courts</strong><span>Story · open world · farm, craft, build</span></button>
+          <button class="mode-btn trials" id="trials-btn" data-mode="trials"><span class="mode-icon">𓂀</span><strong>Trials of Xibalba</strong><span>7 houses of the Popol Vuh · challenges</span></button>
+          <button class="mode-btn" data-mode="ringhunt"><span class="mode-icon">◎</span><strong>Ring Hunt</strong><span>75 seconds · chain rings for combos</span></button>
+          <button class="mode-btn" data-mode="local2p"><span class="mode-icon">⚑</span><strong>Local 2P</strong><span>Two players, one keyboard</span></button>
+          <button class="mode-btn" data-mode="online"><span class="mode-icon">⟐</span><strong>Online 2P</strong><span>Host a room code or join a friend</span></button>
+        </div>
+        <div class="menu-row">
+          <label>Opponent <select id="difficulty"><option value="easy">Novice</option><option value="normal" selected>Warrior</option><option value="hard">Champion</option></select></label>
+          <label>Graphics <select id="quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+          <button id="howto-btn" class="link-btn">How to play</button>
+          <button id="fullscreen-btn" class="link-btn" aria-label="Play full screen">⛶ Full screen</button>
+        </div>
+        <div id="records" class="records"></div>
+      </div>
+    </div>
+
+    <!-- ===================== TRIALS ===================== -->
+    <div id="trials" class="overlay">
+      <div class="panel wide trials-panel">
+        <div class="eyebrow">THE ROAD TO XIBALBA</div>
+        <h2>Trials of the Underworld</h2>
+        <p class="trials-intro">Summoned by the lords of death, the Hero Twins passed a night in each of Xibalba's houses before the final game. Pass each house to open the next.</p>
+        <div id="trial-list" class="trial-list"></div>
+        <div class="pick-actions"><button id="trials-back" class="secondary">Back</button></div>
+      </div>
+    </div>
+
+    <!-- ===================== FULL SCREEN HELP ===================== -->
+    <div id="fs-help" class="overlay">
+      <div class="panel compact">
+        <h2>Play full screen</h2>
+        <p id="fs-help-text">This browser can't switch to full screen from inside a page.</p>
+        <ol class="fs-steps">
+          <li>Open the game's web address in <b>Safari</b>.</li>
+          <li>Tap <b>Share</b> <span aria-hidden="true">⎋</span>, then <b>Add to Home Screen</b>.</li>
+          <li>Launch it from the new <b>Sun-Stone</b> icon — it opens full screen, with no browser bars.</li>
+        </ol>
+        <button id="fs-help-close">Got it</button>
+      </div>
+    </div>
+
+    <!-- ===================== FIGHTER SELECT ===================== -->
+    <div id="fighters" class="overlay">
+      <div class="fighters-layout">
+        <div id="fighter-stage" aria-hidden="true"></div>
+        <div class="panel fighters-panel">
+          <div class="eyebrow">CHOOSE YOUR FIGHTER</div>
+          <h2 id="pick-name">Balam</h2>
+          <div class="pick-title" id="pick-title">Jaguar Warrior</div>
+          <p class="pick-blurb" id="pick-blurb"></p>
+          <div id="fighter-cards" class="fighter-cards" role="listbox" aria-label="Fighters"></div>
+          <p class="pick-note">Every fighter plays the same — the choice is who you take onto the court.</p>
+          <div class="pick-actions"><button id="pick-confirm">Choose</button><button id="pick-cancel" class="secondary">Back</button></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================== HOW TO PLAY ===================== -->
+    <div id="howto" class="overlay">
+      <div class="panel wide">
+        <div class="eyebrow">THE RULES OF THE COURT</div>
+        <h2>How to play</h2>
+        <div class="rules-grid">
+          <div class="rule"><div class="rule-pts">3</div><div><strong>Ring</strong><br>Send the ball through the opponent's sun-stone ring. Lobs curve toward it when you face it.</div></div>
+          <div class="rule"><div class="rule-pts">1</div><div><strong>Back line</strong><br>A low ball that touches the opponent's end wall scores. High balls just bounce off.</div></div>
+          <div class="rule"><div class="rule-pts">1</div><div><strong>Double bounce</strong><br>Let the ball bounce twice on your half and the other team scores. Keep it moving!</div></div>
+          <div class="rule"><div class="rule-pts">☀</div><div><strong>Sudden death</strong><br>Tied when the clock runs out? Next point wins.</div></div>
+        </div>
+        <h3>Controls</h3>
+        <div class="controls-grid">
+          <div><span class="key">W A S D</span> move <span class="key">Mouse</span> aim</div>
+          <div><span class="key">Space</span> / <span class="key">Click</span> hold to charge, release to STRIKE</div>
+          <div><span class="key">E</span> / <span class="key">Right click</span> hold for a high LOB (best for rings)</div>
+          <div><span class="key">Q</span> shoulder CHARGE — knocks down and steals</div>
+          <div class="p2"><span class="key">Arrows</span> <span class="key">Enter</span> <span class="key">R-Shift</span> <span class="key">.</span> Player 2 (local)</div>
+          <div><span class="key">Touch</span> left stick moves · hold the buttons on the right · drag the court to aim</div>
+        </div>
+        <h3>Power-ups</h3>
+        <div class="powerup-list">
+          <div><i style="--c:#7fe9ff"></i><strong>Kukulkan's Wind</strong> — 45% faster for 8 s</div>
+          <div><i style="--c:#ffb13b"></i><strong>Jaguar Heart</strong> — your next strike is a crushing blow that knocks down nearby rivals</div>
+          <div><i style="--c:#ffe36b"></i><strong>Sun Shield</strong> — your back line repels the ball for 8 s</div>
+          <div><i style="--c:#c9a7ff"></i><strong>Moon Gravity</strong> — low gravity for everyone, 6 s</div>
+        </div>
+        <p class="credits">Fighters &amp; props: KayKit by Kay Lousberg (CC0). Coyote: "Fox" by PixelMannequin, rig &amp; animation by tomkranis, glTF by AsoboStudio &amp; scurest (CC-BY 4.0). Muflus, music and sound effects: Curse of Mirra by LambdaClass (CC BY-SA 4.0), converted and re-encoded.</p>
+        <button id="howto-close">Got it</button>
+      </div>
+    </div>
+
+    <!-- ===================== ONLINE ===================== -->
+    <div id="online" class="overlay">
       <div class="panel">
-        <div class="eyebrow">A MYTHIC POK-TA-POK GAME</div>
-        <h1>SUN-STONE<br>LEAGUE</h1>
-        <p>Enter the ancient court. Build kinetic energy and strike the sacred ball through the sun-stone ring.</p>
-        <button class="mode-btn" data-mode="solo"><strong>Solo Challenge</strong><span>Score as many rings as you can in 60 seconds</span></button>
-        <button class="mode-btn" data-mode="versus"><strong>1v1 vs Rival</strong><span>First warrior to score 3 rings wins</span></button>
-        <div class="controls-copy">WASD / arrows to move · mouse to aim · Space to strike</div>
+        <div class="eyebrow">ONLINE 2P</div>
+        <h2>Play with a friend</h2>
+        <p>Both players need this page open. One hosts, the other joins with the room code. Each of you gets an AI keeper.</p>
+        <div class="online-row">
+          <button id="host-btn">Host a room</button>
+          <div class="join-box"><input id="join-code" placeholder="ROOM CODE" maxlength="5" autocapitalize="characters" spellcheck="false"><button id="join-btn">Join</button></div>
+        </div>
+        <div id="online-status" class="online-status"></div>
+        <button id="online-back" class="secondary">Back</button>
       </div>
     </div>
 
     <div id="countdown" class="overlay"><div id="countdown-value">3</div></div>
     <div id="callout"></div>
 
+    <!-- ===================== HUD ===================== -->
     <div id="hud" class="hidden">
-      <div class="score-block"><div class="score-label" id="player-label">You</div><div class="score-value" id="score-player">0</div></div>
-      <div id="timer-block"><div class="score-label" id="center-label">Time</div><div class="score-value" id="center-value">60</div></div>
-      <div class="score-block" id="rival-score"><div class="score-label">Rival</div><div class="score-value" id="score-ai">0</div></div>
+      <div class="score-block balam">
+        <div class="score-label" id="label-balam">Balam</div>
+        <div class="score-row"><div class="score-value" id="score-balam">0</div><div class="maya-num" id="maya-balam"></div></div>
+      </div>
+      <div id="timer-block"><div class="score-label" id="center-label">Time</div><div class="score-value" id="center-value">3:00</div><div id="sub-label"></div></div>
+      <div class="score-block kuk" id="kuk-score">
+        <div class="score-label" id="label-kuk">K'uk'</div>
+        <div class="score-row"><div class="maya-num" id="maya-kuk"></div><div class="score-value" id="score-kuk">0</div></div>
+      </div>
     </div>
 
-    <div id="energy" class="hidden">
-      <div class="energy-label">BALL ENERGY <span id="energy-value">0%</span></div>
-      <div class="energy-track"><div id="energy-fill"></div></div>
+    <div id="letterbox" aria-hidden="true"></div>
+    <div id="cine-title" aria-live="polite"><small id="cine-sub"></small><strong id="cine-main"></strong><em id="cine-vs"></em></div>
+    <div id="duel-hud" class="hidden" aria-live="polite">
+      <div class="duel-side" id="duel-a">
+        <div class="duel-top"><span class="duel-name" id="duel-name-a">You</span><span class="pips" id="pips-a"></span></div>
+        <div class="hp"><div class="hp-lag" id="hp-lag-a"></div><div class="hp-fill" id="hp-a"></div></div>
+        <div class="meter"><div class="meter-fill" id="meter-a"></div><span class="meter-label">NAWAL</span></div>
+      </div>
+      <div id="duel-clock"><div id="duel-time">60</div><div id="duel-round">ROUND 1</div></div>
+      <div class="duel-side right" id="duel-b">
+        <div class="duel-top"><span class="pips" id="pips-b"></span><span class="duel-name" id="duel-name-b">Rival</span></div>
+        <div class="hp"><div class="hp-lag" id="hp-lag-b"></div><div class="hp-fill" id="hp-b"></div></div>
+        <div class="meter"><div class="meter-fill" id="meter-b"></div></div>
+      </div>
     </div>
 
-    <div id="hint" class="hidden">Move close to the ball and strike toward the sun-stone ring</div>
+    <!-- ===================== ADVENTURE (open world) ===================== -->
+    <div id="adv-hud" class="hidden">
+      <div id="adv-quest"><strong id="adv-quest-title"></strong><span id="adv-quest-goal"></span></div>
+      <div id="adv-inv"></div>
+      <div id="adv-holding"><small>HOLDING</small><span id="adv-held">—</span></div>
+      <div id="adv-prompt" class="hidden"></div>
+      <div id="adv-toast"></div>
+      <div id="adv-meter" class="hidden"><div class="adv-meter-zone"></div><div id="adv-meter-mark"></div></div>
+    </div>
+    <div id="adv-dialog" class="hidden">
+      <div class="adv-dialog-box"><strong id="adv-who"></strong><p id="adv-line"></p><em id="adv-reward"></em><button id="adv-next">Next ›</button></div>
+    </div>
+    <div id="adv-craft" class="overlay">
+      <div class="panel wide"><div class="eyebrow">CRAFTING</div><h2>Make something</h2>
+        <div id="adv-recipes" class="recipes"></div>
+        <div class="pick-actions"><button id="adv-craft-close">Close</button><button id="adv-reset" class="secondary">Restart story</button></div>
+      </div>
+    </div>
+
+    <div id="status-strip" class="hidden">
+      <div id="charge-wrap"><div class="charge-label">POWER</div><div class="charge-track"><div id="charge-fill"></div></div></div>
+      <div id="effects"></div>
+      <div id="combo" class="hidden"></div>
+    </div>
+
+    <div id="hint" class="hidden"></div>
+    <div id="tutorial" class="hidden"><div class="tut-step" id="tut-step"></div><div class="tut-progress" id="tut-progress"></div></div>
 
     <div id="touch-controls" class="hidden">
-      <div id="joystick"><div id="joystick-knob"></div></div>
-      <button id="hit-btn" aria-label="Strike the ball">STRIKE</button>
+      <div id="stick-zone" aria-label="Movement: touch and drag anywhere on the left side"><div id="joystick"><div id="joystick-knob"></div></div></div>
+      <div class="touch-buttons">
+        <button id="spirit-btn" class="touch-btn small spirit" aria-label="Transform into your animal spirit">NAWAL</button>
+        <button id="guard-btn" class="touch-btn small guard" aria-label="Guard (hold)">GUARD</button>
+        <button id="tackle-btn" class="touch-btn small" aria-label="Tackle (shoulder charge)">TACKLE</button>
+        <button id="lob-btn" class="touch-btn small" aria-label="Lob the ball">LOB</button>
+        <button id="strike-btn" class="touch-btn big" aria-label="Strike the ball (hold to charge)">STRIKE</button>
+      </div>
     </div>
 
     <button id="pause-btn" class="hidden" aria-label="Pause game">Ⅱ</button>
-    <div id="pause-screen" class="overlay"><div class="panel compact"><h1>PAUSED</h1><p>Your match is waiting.</p><button id="resume-btn">Resume game</button></div></div>
+    <div id="pause-screen" class="overlay"><div class="panel compact"><h2>PAUSED</h2><p>The court waits.</p><button id="resume-btn">Resume</button><button id="fullscreen-btn-2" class="secondary">⛶ Full screen</button><button id="quit-btn" class="secondary">Quit to menu</button></div></div>
 
     <div id="endscreen" class="overlay">
       <div class="panel compact">
         <div class="eyebrow" id="end-mode">MATCH COMPLETE</div>
         <h1 id="end-title">VICTORY</h1>
         <p id="end-sub"></p>
-        <button id="restart-btn">Play Again</button>
-        <button id="menu-btn" class="secondary">Choose Mode</button>
+        <div id="end-stats" class="end-stats"></div>
+        <div class="end-buttons">
+          <button id="restart-btn">Play Again</button>
+          <button id="menu-btn" class="secondary">Choose Mode</button>
+        </div>
       </div>
     </div>
 
     <div id="webgl-error" class="overlay"><div class="panel"><h1>WebGL Unavailable</h1><p>Please open this game in a modern browser.</p></div></div>
+    <div id="rotate-hint">Rotate to landscape for the best view ↻</div>
   </div>
   <script type="module" src="./src/main.js"></script>
 </body>

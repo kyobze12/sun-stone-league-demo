@@ -1,0 +1,128 @@
+// Shared tuning constants for Sun-Stone League.
+// Everything that defines "how the sport plays" lives here so the sim, AI,
+// renderer and tests agree on one set of numbers.
+
+export const COURT_LENGTH = 32;   // z axis (goal to goal)
+export const COURT_WIDTH = 14;    // x axis
+export const WALL_HEIGHT = 5.4;   // low flanks, as at Copán — keeps the skyline in view from the play camera
+
+export const RING_HEIGHT = 4.1;
+export const RING_RADIUS = 1.12;
+export const RING_TUBE = 0.22;
+export const RING_INSET = 1.6;    // ring sits this far in front of the end line (ball must clear it before the wall)
+
+export const BALL_RADIUS = 0.43;
+export const GRAVITY = -17;
+export const RESTITUTION = 0.66;
+
+export const PLAYER_SPEED = 7.1;
+export const PLAYER_RADIUS = 0.55;
+export const HIT_RANGE = 2.05;     // distance from player hip to ball centre
+export const HIT_MAX_HEIGHT = 2.9; // ball must be at or below this to be struck
+export const CHARGE_TIME = 0.85;   // seconds to reach full charge
+export const STRIKE_COOLDOWN = 0.42;
+export const STRIKE_BUFFER = 0.24;   // grace window: a release just before the ball arrives still connects
+export const TACKLE_COOLDOWN = 2.1;
+export const TACKLE_DURATION = 0.26;
+export const TACKLE_DISTANCE = 3.6;
+export const TACKLE_HIT_RADIUS = 1.25;
+export const STUN_TIME = 0.95;
+export const BACK_ZONE = 3.2;      // depth of each team's scoring/keeper zone
+export const BACKLINE_MAX_HEIGHT = 1.7; // only genuinely low balls score on the end wall; higher ones rebound
+
+export const POINTS = Object.freeze({ ring: 3, backline: 1, doubleBounce: 1 });
+
+// Teams. Balam (jaguar) defends the south end (z < 0) and attacks north (+z).
+// K'uk' (quetzal) defends the north end and attacks south (-z).
+export const TEAMS = Object.freeze({
+  balam: Object.freeze({ id: 'balam', name: 'Balam', glyph: 'Jaguar', attacks: 1, color: 0xf2a93b, accent: 0x2a1a0e, css: '#f2a93b' }),
+  kuk: Object.freeze({ id: 'kuk', name: "K'uk'", glyph: 'Quetzal', attacks: -1, color: 0x1fb89a, css: '#1fb89a', accent: 0xc8323c }),
+});
+export const OTHER_TEAM = Object.freeze({ balam: 'kuk', kuk: 'balam' });
+
+// Spawn roster for 2v2. Positions are relative to a team attacking +z and
+// get mirrored for K'uk'.
+export const ROSTER = Object.freeze([
+  { slot: 'striker', offset: [-2.2, 0, -6.5] },
+  { slot: 'keeper', offset: [2.0, 0, -11.5] },
+]);
+
+// `assist` is the aim help the HUMAN gets (an easier opponent helps you more).
+// `aiAssist` is how cleanly the AI itself finds the ring, and rises with
+// difficulty. Keeping these separate matters: sharing one number made Novice
+// opponents the most accurate shooters in the game.
+export const DIFFICULTY = Object.freeze({
+  easy:   { label: 'Novice',   reaction: 0.50, aimError: 0.30, speed: 0.78, assist: 0.80, aiAssist: 0.08, tackle: 0.25, charge: 0.55, lob: 0.45 },
+  normal: { label: 'Warrior',  reaction: 0.26, aimError: 0.15, speed: 0.92, assist: 0.58, aiAssist: 0.20, tackle: 0.55, charge: 0.80, lob: 0.65 },
+  hard:   { label: 'Champion', reaction: 0.12, aimError: 0.06, speed: 1.02, assist: 0.42, aiAssist: 0.28, tackle: 0.85, charge: 1.00, lob: 0.80 },
+});
+
+export const MODES = Object.freeze({
+  practice: { id: 'practice', title: 'Practice', duration: 0, target: 0 },
+  match:    { id: 'match', title: 'Ballcourt Match', duration: 180, target: 15 },
+  ringhunt: { id: 'ringhunt', title: 'Ring Hunt', duration: 75, target: 0 },
+  local2p:  { id: 'local2p', title: 'Local 2P', duration: 180, target: 15 },
+  online:   { id: 'online', title: 'Online 2P', duration: 180, target: 15 },
+  duel:     { id: 'duel', title: 'Xibalba Duel', duration: 60, target: 2 },   // per-round clock; rounds to win
+});
+
+// Xibalba Duel: the ballgame as a fight. In the Popol Vuh the Hero Twins
+// played the lords of the underworld for their lives; here the court is the
+// arena, the rubber ball is a weapon, and the ring is a finisher.
+export const DUEL = Object.freeze({
+  hp: 150,
+  meleeRange: 2.1,          // reach of a hand/hip blow
+  meleeArc: 0.35,           // cos of the half-angle in front that a blow covers (~70°)
+  light: [4, 5, 8],         // the three hits of a light chain
+  chainWindow: 0.65,        // seconds to continue a chain
+  lightStun: 0.24, chainFinisherStun: 0.5,
+  heavyBase: 10, heavyScale: 14, heavyStun: 0.7, heavyKnock: 1.6,
+  heavyThreshold: 0.4,      // charge at release above which a blow is heavy
+  superDamage: 30, superStun: 1.1,
+  guardBreakStun: 0.8, chip: 1,
+  guardSpeed: 0.45,
+  tackleDamage: 8,
+  ballMinSpeed: 7, ballDamagePerSpeed: 1.3, ballDamageMax: 28, ballKnockdown: 18,
+  ringDamage: 40,           // threading the rival's ring: the Sun-Stone finisher
+  meterOnHit: 0.7, meterOnHurt: 0.45,
+  // K'ak' — fire blast: release LOB with no ball in reach
+  blastSpeed: 17, blastBase: 7, blastScale: 9, blastCooldown: 1.6, blastLife: 1.4, blastRadius: 0.95,
+  // Nawal — spirit form: when the Sun meter is full, transform into your animal spirit
+  spiritTime: 9, spiritSpeed: 1.35, spiritPower: 1.4, spiritArmor: 0.7,
+  spawnZ: 3.6,
+});
+
+export const POWERUPS = Object.freeze({
+  wind:    { id: 'wind', name: "Kukulkan's Wind", short: 'WIND', desc: 'Move 45% faster for 8 s', duration: 8, color: 0x7fe9ff },
+  jaguar:  { id: 'jaguar', name: 'Jaguar Heart', short: 'JAGUAR', desc: 'Your next strike is a crushing blow', duration: 0, color: 0xffb13b },
+  shield:  { id: 'shield', name: 'Sun Shield', short: 'SHIELD', desc: 'Your back line repels the ball for 8 s', duration: 8, color: 0xffe36b },
+  moon:    { id: 'moon', name: 'Moon Gravity', short: 'MOON', desc: 'Low gravity for everyone, 6 s', duration: 6, color: 0xc9a7ff },
+});
+export const POWERUP_SPAWN_INTERVAL = 11;
+export const POWERUP_LIFETIME = 14;
+
+// Trials of Xibalba. In the Popol Vuh the Hero Twins, Hunahpu and
+// Xbalanque, were summoned to the underworld court and made to pass a night
+// in each of its deadly houses before playing the lords at the ballgame.
+// Each trial bends one of the game's modes with a rule from that house.
+export const TRIALS = Object.freeze([
+  { id: 'dark', house: 'Dark House', title: 'Quequma-ha', story: 'Only darkness inside. The lords gave the twins a torch and cigars that must still be burning at dawn.', goal: 'Thread 4 lit rings in 70 seconds — in the dark.', base: 'ringhunt', duration: 70, goalRings: 4, env: 'dark' },
+  { id: 'razor', house: 'Razor House', title: 'Chayim-ha', story: 'Obsidian blades that move on their own, grinding back and forth.', goal: 'Thread 3 rings in 75 seconds while the blades sweep the court.', base: 'ringhunt', duration: 75, goalRings: 3, hazards: 'blades' },
+  { id: 'cold', house: 'Cold House', title: 'Xuxulim-ha', story: 'Hail and freezing wind. The floor is ice.', goal: 'Defeat Hun-Kame on the ice. One round.', base: 'duel', rounds: 1, rival: 'kame', env: 'cold', ice: true },
+  { id: 'jaguar', house: 'Jaguar House', title: 'Balami-ha', story: 'Full of hungry jaguars. The twins threw them bones to gnaw instead.', goal: 'Defeat a rival who never leaves jaguar form.', base: 'duel', rounds: 1, rival: 'balam', rivalSpirit: true, rivalLevel: 'easy' },
+  { id: 'fire', house: 'Fire House', title: 'Chuluc-ha', story: 'Nothing but fire inside. It burns, but the twins did not.', goal: 'Survive 45 seconds of fire rain — or defeat Vucub-Kame first.', base: 'duel', rounds: 1, rival: 'vucub', hazards: 'fire', duration: 45, survive: true, env: 'fire', rivalLevel: 'easy' },
+  { id: 'bats', house: 'Bat House', title: 'Zotzi-ha', story: 'Home of Kamazotz, the death bat, whose blade took Hunahpu’s head.', goal: 'Defeat Kamazotz in the dark. Best of three.', base: 'duel', rounds: 2, rival: 'sotz', env: 'dark' },
+  { id: 'lords', house: 'The Ballcourt of Xibalba', title: 'Hun-Kame & Vucub-Kame', story: 'The final game against One Death and Seven Death.', goal: 'Beat the lords of the underworld to 9 points.', base: 'match', target: 9, duration: 150, rivals: ['kame', 'vucub'], env: 'dusk' },
+]);
+
+// Ballcourts. Each plays differently, not just looks different: the Jungle
+// Court's fallen pillars deflect the ball and block runs, the Highland Court
+// has a crosswind that bends every high ball, and the Cenote Court has a
+// sacred pool at centre court that slows fighters and kills the bounce.
+export const ARENAS = Object.freeze({
+  city:     { id: 'city', name: 'Lost City Court', blurb: 'The great ceremonial court. No tricks — only skill.' },
+  jungle:   { id: 'jungle', name: 'Jungle Court', blurb: 'Fallen pillars deflect the ball and block your run.', env: 'jungle',
+              obstacles: [{ x: -3.2, z: -5, r: .75 }, { x: 3.4, z: -1.5, r: .75 }, { x: -2.6, z: 3.5, r: .75 }, { x: 3, z: 7, r: .75 }] },
+  highland: { id: 'highland', name: 'Highland Court', blurb: 'A mountain crosswind bends every high ball.', env: 'highland', wind: { strength: 7.5, period: 9 } },
+  cenote:   { id: 'cenote', name: 'Cenote Court', blurb: 'A sacred pool at centre court slows you and swallows the bounce.', env: 'cenote', pool: { x: 0, z: 0, r: 3.4 } },
+});
