@@ -3,6 +3,7 @@ import { ROSTER, DEFAULT_LOOK, lookById, buildHeadgear } from './roster.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as cloneSkeleton } from 'three/addons/utils/SkeletonUtils.js';
 import { TEAMS } from './config.js';
+import { hasFighter, createFighter, animateFighter } from './fighters.js';
 
 export const TARGET_HEIGHT = 2.2;
 
@@ -126,8 +127,8 @@ export async function loadSkins(manager) {
 }
 
 /** Fix the headdress to the head bone, sized and oriented in the rest pose. */
-function addHeadgear(rig, gear) {
-  const head = rig.bones.Head;
+function addHeadgear(rig, gear, kaykit = false) {
+  const head = rig.bones.Head || rig.bones.head;
   if (!head || !gear) return;
   const piece = buildHeadgear(gear);
   rig.root.updateMatrixWorld(true);
@@ -137,11 +138,14 @@ function addHeadgear(rig, gear) {
   const rootQ = rig.root.getWorldQuaternion(new THREE.Quaternion());
   // Built in fighter space (y up, z toward the fighter's front); the source
   // model faces -z inside its container after normalizeModel's half turn.
-  const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+  const facing = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), kaykit ? 0 : Math.PI);
   piece.quaternion.copy(headQ.clone().invert().multiply(rootQ).multiply(facing));
-  const scale = TARGET_HEIGHT / 1.96;
+  // KayKit heads are big and stylised: scale the plumes up and lift them to
+  // the crown of the head.
+  const scale = kaykit ? 2.3 : TARGET_HEIGHT / 1.96;
   piece.scale.setScalar(scale / headS.x);
-  piece.position.copy(head.worldToLocal(headPos.clone()));
+  const anchor = headPos.clone(); if (kaykit) anchor.y += .28;
+  piece.position.copy(head.worldToLocal(anchor));
   head.add(piece);
   rig.headgear = piece;
 }
@@ -223,6 +227,11 @@ function rotateBone(rig,name,x=0,y=0,z=0) {
 }
 
 export function createCharacter(sourceModel, fighter, lookId = null) {
+  const wanted = lookById(lookId || DEFAULT_LOOK[fighter.team]);
+  if (hasFighter(wanted.id)) {
+    const character = createFighter(wanted.id);
+    if (character) { addHeadgear(character.userData.rig, wanted.gear, true); return character; }
+  }
   if (sourceModel) {
     try {
       const look = lookById(lookId || DEFAULT_LOOK[fighter.team]);
@@ -259,6 +268,7 @@ export function loadCharacterModel(manager, modelUrl) {
 
 export function animateCharacter(rig,speed,swingTimer,dt,time,state={}) {
   if(!rig?.root || dt<=0)return;
+  if(rig.kind==='clip') { animateFighter(rig,dt,state); return; }
   const stun=state.stun||0,dash=state.dash||0,charge=state.charge??-1;
   rig.root.rotation.x=THREE.MathUtils.damp(rig.root.rotation.x,dash>0?.42:stun>0?-.55:charge>=0?.12*charge:0,14,dt);
   rig.root.rotation.z=THREE.MathUtils.damp(rig.root.rotation.z,stun>0?.35:0,10,dt);

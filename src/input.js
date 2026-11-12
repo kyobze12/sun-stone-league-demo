@@ -9,7 +9,7 @@ import * as THREE from 'three';
  */
 export const keys = {};
 const touchMove = { x: 0, z: 0 };
-const touchButtons = { strike: false, lob: false, tackle: false };
+const touchButtons = { strike: false, lob: false, tackle: false, guard: false, spirit: false };
 let mouseAim = null;         // angle or null
 let mouseStrike = false;
 let touchAim = null;
@@ -22,13 +22,13 @@ export const isTouch = () => matchMedia('(pointer: coarse)').matches;
 export function resetInput() {
   for (const key of Object.keys(keys)) delete keys[key];
   touchMove.x = touchMove.z = 0; mouseAim = null; touchAim = null; mouseStrike = false;
-  touchButtons.strike = touchButtons.lob = touchButtons.tackle = false;
+  touchButtons.strike = touchButtons.lob = touchButtons.tackle = touchButtons.guard = touchButtons.spirit = false;
   resetStick();
 }
 
 const SCHEMES = {
-  p1: { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], strike: ['Space'], lob: ['KeyE', 'ShiftLeft'], tackle: ['KeyQ', 'KeyF'] },
-  p2: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], strike: ['Enter', 'NumpadEnter'], lob: ['ShiftRight', 'Slash'], tackle: ['Period', 'ControlRight'] },
+  p1: { up: ['KeyW'], down: ['KeyS'], left: ['KeyA'], right: ['KeyD'], strike: ['Space'], lob: ['KeyE', 'ShiftLeft'], tackle: ['KeyQ', 'KeyF'], guard: ['KeyR', 'KeyC'], spirit: ['KeyV'] },
+  p2: { up: ['ArrowUp'], down: ['ArrowDown'], left: ['ArrowLeft'], right: ['ArrowRight'], strike: ['Enter', 'NumpadEnter'], lob: ['ShiftRight', 'Slash'], tackle: ['Period', 'ControlRight'], guard: ['Quote'], spirit: ['Backslash'] },
 };
 const any = (codes) => codes.some((code) => keys[code]);
 
@@ -40,28 +40,35 @@ const any = (codes) => codes.some((code) => keys[code]);
  * @param {boolean} o.touch include touch controls
  * @param {boolean} o.arrowsAsP1 in single player, arrows also drive p1
  */
-export function readInput(scheme, { facing = 1, touch = false, arrowsAsP1 = false } = {}) {
+export function readInput(scheme, { facing = 1, yaw = null, touch = false, arrowsAsP1 = false } = {}) {
   const s = SCHEMES[scheme];
   let mx = 0, mz = 0;
   if (any(s.up)) mz += 1; if (any(s.down)) mz -= 1; if (any(s.left)) mx -= 1; if (any(s.right)) mx += 1;
   if (arrowsAsP1) { if (keys.ArrowUp) mz += 1; if (keys.ArrowDown) mz -= 1; if (keys.ArrowLeft) mx -= 1; if (keys.ArrowRight) mx += 1; }
   // Court-relative: up = toward the ring this player attacks. The camera sits behind the player, so
   // screen-right is court -x when attacking +z and +x when attacking -z.
-  mx *= -facing; mz *= facing;
-  let strike = any(s.strike), lob = any(s.lob), tackle = any(s.tackle);
+  // With a lock-on camera (`yaw` = the direction the camera looks along the
+  // floor), up is "toward the rival" and right is screen-right.
+  const toWorld = (rx, up) => yaw === null
+    ? [rx * -facing, up * facing]
+    : [up * Math.sin(yaw) - rx * Math.cos(yaw), up * Math.cos(yaw) + rx * Math.sin(yaw)];
+  [mx, mz] = toWorld(mx, mz);
+  let strike = any(s.strike), lob = any(s.lob), tackle = any(s.tackle), guard = any(s.guard), spirit = any(s.spirit);
   let aim = null;
   if (scheme === 'p1') {
     if (mouseStrike) strike = true;
     if (mouseAim !== null) aim = mouseAim;
     if (touch) {
-      mx += -touchMove.x * facing; mz += -touchMove.z * facing;
+      const [tx, tz] = toWorld(touchMove.x, -touchMove.z);
+      mx += tx; mz += tz;
       strike = strike || touchButtons.strike; lob = lob || touchButtons.lob; tackle = tackle || touchButtons.tackle;
+      guard = guard || touchButtons.guard; spirit = spirit || touchButtons.spirit;
       if (touchAim !== null) aim = touchAim;
     }
   }
   const len = Math.hypot(mx, mz);
   if (len > 1) { mx /= len; mz /= len; }
-  return { mx, mz, aim, strike, lob, tackle };
+  return { mx, mz, aim, strike, lob, tackle, guard, spirit };
 }
 
 function updateAim(clientX, clientY, camera, canvas, playerPos) {
@@ -134,7 +141,7 @@ export function setupInput(canvas, camera, getPlayerPos) {
   joystick.addEventListener('pointercancel', releaseStick);
 
   // Touch buttons (hold-to-charge works because we track down/up)
-  for (const [id, key] of [['strike-btn', 'strike'], ['lob-btn', 'lob'], ['tackle-btn', 'tackle']]) {
+  for (const [id, key] of [['strike-btn', 'strike'], ['lob-btn', 'lob'], ['tackle-btn', 'tackle'], ['guard-btn', 'guard'], ['spirit-btn', 'spirit']]) {
     const button = document.getElementById(id);
     if (!button) continue;
     // Capture the pointer so a thumb that drifts a few pixels off the button

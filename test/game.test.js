@@ -316,3 +316,57 @@ test('every fighter is spawned, scaled alike and animates independently', async 
   const low = Math.min(...rig.feet.map((bone) => bone.getWorldPosition(new THREE.Vector3()).y));
   assert.ok(Math.abs(low - rig.footHeight) < .01, 'feet stay on the stone');
 });
+
+test('duel: blows chain, guards block, heavies break guard, KO ends the round', async () => {
+  const { DUEL } = await import('../src/config.js');
+  const world = new World({ mode: 'duel', humans: ['balam-striker', 'kuk-striker'], seed: 3 });
+  const match = new Match('duel', world);
+  match.phase = 'playing';
+  const a = world.byId('balam-striker'), b = world.byId('kuk-striker');
+  world.ball.pos.set(6, 0.43, 12); world.ball.vel.set(0, 0, 0);     // ball out of the way
+  a.pos.set(0, 0, 0); b.pos.set(0, 0, 1.5); a.facing = 0; b.facing = Math.PI;
+  const ev = [];
+  world.melee(a, 0, ev);
+  assert.equal(b.hp, DUEL.hp - DUEL.light[0], 'a light blow lands');
+  world.melee(a, 0, ev);
+  assert.equal(a.chain, 2, 'a quick second blow continues the chain');
+  b.guard = true; b.stun = 0;
+  const before = b.hp;
+  world.melee(a, 0, ev);
+  assert.ok(before - b.hp <= DUEL.chip, 'a guard absorbs a light blow');
+  b.pos.set(0, 0, 1.5);   // blows push the target back; step in again
+  world.melee(a, 1, ev);
+  assert.ok(b.stun > 0 && ev.some((e) => e.kind === 'guardbreak'), 'a heavy blow breaks the guard');
+  b.hp = 3; b.guard = false; b.stun = 0; a.hitCooldown = 0; b.pos.set(0, 0, 1.5);
+  const events = [];
+  world.melee(a, 1, events);
+  assert.ok(events.some((e) => e.type === 'ko'), 'KO at zero health');
+  match.update(0.016, events);
+  assert.equal(match.score.balam, 1, 'the round goes to the striker');
+});
+
+test('duel: fire blast flies and hurts; a full meter unlocks the nawal', async () => {
+  const { DUEL } = await import('../src/config.js');
+  const world = new World({ mode: 'duel', humans: ['balam-striker', 'kuk-striker'], seed: 4 });
+  const a = world.byId('balam-striker'), b = world.byId('kuk-striker');
+  world.ball.pos.set(6, 0.43, 12);
+  a.pos.set(0, 0, -4); b.pos.set(0, 0, 4); a.facing = 0;
+  world.blast(a, 1, []);
+  assert.equal(world.projectiles.length, 1);
+  for (let i = 0; i < 60; i++) world.step(1 / 60, { 'balam-striker': { mx: 0, mz: 0 }, 'kuk-striker': { mx: 0, mz: 0 } });
+  assert.ok(b.hp < DUEL.hp, 'the blast hit');
+  a.meter = 100;
+  const ev = world.step(1 / 60, { 'balam-striker': { mx: 0, mz: 0, spirit: true }, 'kuk-striker': { mx: 0, mz: 0 } });
+  assert.ok(a.spirit > 0 && ev.some((e) => e.type === 'transform'), 'transformed');
+  assert.equal(a.meter, 0);
+});
+
+test('duel: AI against AI finishes matches with KOs', () => {
+  for (const seed of [11, 12]) {
+    const world = new World({ mode: 'duel', humans: [], seed });
+    const match = new Match('duel', world);
+    let t = 0;
+    while (match.phase !== 'ended' && t < 400) { const ev = match.phase === 'playing' ? world.step(1 / 60, {}) : []; match.update(1 / 60, ev); t += 1 / 60; }
+    assert.equal(match.phase, 'ended', 'seed ' + seed);
+  }
+});

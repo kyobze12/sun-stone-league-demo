@@ -2,13 +2,13 @@ import * as THREE from 'three';
 import {
   COURT_WIDTH, COURT_LENGTH, PLAYER_SPEED, PLAYER_RADIUS, HIT_RANGE, HIT_MAX_HEIGHT, CHARGE_TIME,
   STRIKE_COOLDOWN, STRIKE_BUFFER, TACKLE_COOLDOWN, TACKLE_DURATION, TACKLE_DISTANCE, TACKLE_HIT_RADIUS, STUN_TIME,
-  TEAMS, OTHER_TEAM, ROSTER, DIFFICULTY, POWERUPS, POWERUP_SPAWN_INTERVAL, POWERUP_LIFETIME, BALL_RADIUS,
+  TEAMS, OTHER_TEAM, ROSTER, DIFFICULTY, POWERUPS, POWERUP_SPAWN_INTERVAL, POWERUP_LIFETIME, BALL_RADIUS, DUEL,
 } from './config.js';
 import { BallState, RINGS, ringFor } from './ball.js';
 import { strikeVelocity } from './shot.js';
-import { AIController } from './ai.js';
+import { AIController, DuelAI } from './ai.js';
 
-export const EMPTY_INPUT = Object.freeze({ mx: 0, mz: 0, aim: null, strike: false, lob: false, tackle: false });
+export const EMPTY_INPUT = Object.freeze({ mx: 0, mz: 0, aim: null, strike: false, lob: false, tackle: false, guard: false, spirit: false });
 
 // Deterministic PRNG so tests and host/client agree on random choices.
 export function mulberry32(seed) {
@@ -43,10 +43,19 @@ export class Player {
     this.prevInput = { ...EMPTY_INPUT };
     this.ai = null;
     this.spawn = new THREE.Vector3();
+    // Duel state
+    this.hp = DUEL.hp;
+    this.guard = false;
+    this.meter = 0;            // fills with blows dealt and taken; full = Sun Strike
+    this.chain = 0;            // position in a light chain
+    this.chainTimer = 0;
+    this.hurt = 0;             // brief flash after taking a hit, for presentation
+    this.spirit = 0;           // seconds left in nawal (animal spirit) form
+    this.blastCooldown = 0;
   }
   get attacks() { return TEAMS[this.team].attacks; }
   get ring() { return ringFor(this.attacks).center; }
-  get moveSpeed() { return PLAYER_SPEED * (this.wind > 0 ? 1.45 : 1) * (this.ai ? this.ai.profile.speed : 1); }
+  get moveSpeed() { return PLAYER_SPEED * (this.wind > 0 ? 1.45 : 1) * (this.spirit > 0 ? DUEL.spiritSpeed : 1) * (this.ai ? this.ai.profile.speed : 1); }
   get busy() { return this.stun > 0 || this.dash > 0; }
 }
 
@@ -68,22 +77,27 @@ export class World {
     this.time = 0;
     this.frozen = false;
     this.ringHunt = mode === 'ringhunt';
+    this.duel = mode === 'duel';
+    this.projectiles = [];
+    this.nextProjectileId = 1;
     this.litRing = 'north';
     this.nextPowerupId = 1;
     const teams = mode === 'ringhunt' || mode === 'practice' ? ['balam'] : ['balam', 'kuk'];
     let index = 0;
     for (const team of teams) {
-      const roster = mode === 'practice' || mode === 'ringhunt' ? [ROSTER[0]] : ROSTER;
+      const roster = mode === 'practice' || mode === 'ringhunt' || mode === 'duel' ? [ROSTER[0]] : ROSTER;
       for (const spec of roster) {
         const id = `${team}-${spec.slot}`;
         const player = new Player({ id, team, slot: spec.slot, control: humans.includes(id) ? 'human' : 'ai', index: index++ });
         const sign = TEAMS[team].attacks;
-        player.spawn.set(spec.offset[0] * sign, 0, spec.offset[2] * sign);
+        if (mode === 'duel') player.spawn.set(0, 0, -DUEL.spawnZ * sign);
+        else player.spawn.set(spec.offset[0] * sign, 0, spec.offset[2] * sign);
         if (player.control === 'ai') {
           const profile = team === 'kuk' || mode === 'ringhunt' ? DIFFICULTY[difficulty] : DIFFICULTY.normal;
           // Each AI draws from its own stream. Sharing one generator made the
           // draw order (and so the team listed first) a systematic advantage.
-          player.ai = new AIController(player, profile, mulberry32(seed * 2654435761 + player.index * 40503 + 7));
+          const rng = mulberry32(seed * 2654435761 + player.index * 40503 + 7);
+          player.ai = mode === 'duel' ? new DuelAI(player, profile, rng) : new AIController(player, profile, rng);
         }
         this.players.push(player);
       }
@@ -108,13 +122,15 @@ export class World {
       player.pendingStrike = null;
       player.speed = 0;
       player.prevInput = { ...EMPTY_INPUT };
+      player.guard = false; player.chain = 0; player.chainTimer = 0; player.hurt = 0;
       if (player.ai) player.ai.reset();
     }
     this.powerups.length = 0;
   }
 
   spawnPowerup() {
-    const kinds = Object.keys(POWERUPS);
+    // The Sun Shield guards a back line, which a duel does not have.
+    const kinds = Object.keys(POWERUPS).filter((k) => !(this.duel && k === 'shield'));
     const kind = kinds[Math.floor(this.random() * kinds.length)];
     const x = (this.random() - .5) * (COURT_WIDTH - 4);
     const z = (this.random() - .5) * (COURT_LENGTH - 10);
@@ -155,7 +171,153 @@ export class World {
     this.nudgeBall(dt);
 
     for (const event of ball.update(dt)) events.push(event);
+    if (this.duel) this.duelTick(dt, events);
     return events;
+  }
+
+  /** Restore both fighters for a new duel round. The Sun meter carries over. */
+  resetRound() {
+    for (const p of this.players) { p.hp = DUEL.hp; p.stun = 0; p.spirit = 0; p.blastCooldown = 0; }
+    this.projectiles.length = 0;
+    this.resetPositions(0);
+  }
+
+  // ------------------------------------------------------------- duel
+  duelTick(dt, events) {
+    const ball = this.ball;
+    // A struck ball is a weapon: it hurts the rival it hits, not its striker.
+    const speed = ball.vel.length();
+    if (ball.struck && speed > DUEL.ballMinSpeed && ball.lastToucher) {
+      for (const p of this.players) {
+        if (p.id === ball.lastToucher || p.hp <= 0) continue;
+        const dx = ball.pos.x - p.pos.x, dz = ball.pos.z - p.pos.z;
+        if (Math.hypot(dx, dz) > PLAYER_RADIUS + BALL_RADIUS + .15 || ball.pos.y > 2.3) continue;
+        const attacker = this.byId(ball.lastToucher);
+        let damage = Math.min(DUEL.ballDamageMax, speed * DUEL.ballDamagePerSpeed);
+        const blocked = this.facingBlock(p, ball.pos);
+        if (blocked) damage *= .25;
+        // Bounce the ball off the body so it cannot hit twice.
+        const n = new THREE.Vector3(dx, 0, dz).normalize();
+        ball.vel.reflect(n).multiplyScalar(.35); ball.vel.y = Math.abs(ball.vel.y) + 2;
+        ball.struck = false; ball.lastToucher = null;
+        this.damage(p, damage, attacker, events, { kind: 'ball', blocked, stun: damage >= DUEL.ballKnockdown && !blocked ? .9 : .25, push: n.multiplyScalar(-(blocked ? .3 : 1)) });
+        break;
+      }
+    }
+    for (const p of this.players) {
+      p.hurt = Math.max(0, p.hurt - dt);
+      p.chainTimer = Math.max(0, p.chainTimer - dt);
+      if (p.chainTimer <= 0) p.chain = 0;
+      p.blastCooldown = Math.max(0, p.blastCooldown - dt);
+      if (p.spirit > 0) { p.spirit = Math.max(0, p.spirit - dt); if (p.spirit === 0) events.push({ type: 'spiritEnd', player: p }); }
+    }
+    // Fire blasts
+    for (let i = this.projectiles.length - 1; i >= 0; i -= 1) {
+      const f = this.projectiles[i];
+      f.life -= dt;
+      f.pos.addScaledVector(f.vel, dt);
+      let gone = f.life <= 0 || Math.abs(f.pos.x) > COURT_WIDTH / 2 + .5 || Math.abs(f.pos.z) > COURT_LENGTH / 2;
+      if (!gone) {
+        for (const p of this.players) {
+          if (p.id === f.owner || p.hp <= 0) continue;
+          if (Math.hypot(p.pos.x - f.pos.x, p.pos.z - f.pos.z) > DUEL.blastRadius) continue;
+          const owner = this.byId(f.owner);
+          const blocked = this.facingBlock(p, f.pos);
+          const push = f.vel.clone().setY(0).normalize().multiplyScalar(blocked ? .25 : .9);
+          this.damage(p, blocked ? 2 : f.damage, owner, events, { kind: 'blast', blocked, stun: blocked ? 0 : .35 + f.power * .3, push });
+          gone = true; break;
+        }
+        // A blast that meets the ball knocks it on.
+        if (!gone && this.ball.pos.distanceTo(f.pos) < BALL_RADIUS + .5) {
+          this.ball.vel.addScaledVector(f.vel, .7).setY(Math.max(this.ball.vel.y, 5));
+          this.ball.lastTouch = this.byId(f.owner)?.team; this.ball.lastToucher = f.owner; this.ball.struck = true;
+          events.push({ type: 'blastBall', pos: f.pos.clone() });
+          gone = true;
+        }
+      }
+      if (gone) { events.push({ type: 'blastEnd', id: f.id, pos: f.pos.clone() }); this.projectiles.splice(i, 1); }
+    }
+  }
+
+  /** K'ak': a fire blast thrown from the hands. Charged releases fly harder. */
+  blast(player, power, events) {
+    if (player.blastCooldown > 0) { events.push({ type: 'whiff', player }); return; }
+    player.blastCooldown = DUEL.blastCooldown * (player.spirit > 0 ? .5 : 1);
+    player.swingTimer = .35; player.hitCooldown = .3;
+    const dir = new THREE.Vector3(Math.sin(player.facing), 0, Math.cos(player.facing));
+    const damage = (DUEL.blastBase + DUEL.blastScale * power) * (player.spirit > 0 ? DUEL.spiritPower : 1);
+    const f = { id: this.nextProjectileId++, owner: player.id, team: player.team, power, damage,
+      pos: player.pos.clone().addScaledVector(dir, .9).setY(1.25), vel: dir.multiplyScalar(DUEL.blastSpeed * (.8 + power * .4)), life: DUEL.blastLife };
+    this.projectiles.push(f);
+    events.push({ type: 'blast', player, projectile: f, power });
+  }
+
+  /** Is `p` guarding and facing `from`? */
+  facingBlock(p, from) {
+    if (!p.guard || p.stun > 0) return false;
+    const toward = Math.atan2(from.x - p.pos.x, from.z - p.pos.z);
+    return Math.cos(toward - p.facing) > -.1;   // a wide front arc
+  }
+
+  damage(victim, amount, attacker, events, { kind = 'light', blocked = false, stun = 0, push = null } = {}) {
+    if (victim.hp <= 0) return;
+    if (attacker?.spirit > 0 && kind !== 'blast' && kind !== 'ring') amount *= DUEL.spiritPower;
+    if (victim.spirit > 0) amount *= DUEL.spiritArmor;
+    const dealt = Math.max(0, Math.round(amount));
+    victim.hp = Math.max(0, victim.hp - dealt);
+    victim.hurt = .25;
+    if (stun > 0) { victim.stun = Math.max(victim.stun, stun); victim.charge = -1; victim.pendingStrike = null; victim.guard = false; }
+    if (push) { victim.pos.add(push); }
+    if (attacker) attacker.meter = Math.min(100, attacker.meter + dealt * DUEL.meterOnHit);
+    victim.meter = Math.min(100, victim.meter + dealt * DUEL.meterOnHurt);
+    events.push({ type: 'hit', player: attacker, victim, damage: dealt, kind, blocked, pos: victim.pos.clone().setY(1.3) });
+    if (victim.hp <= 0) { victim.stun = 2.5; events.push({ type: 'ko', player: attacker, victim }); }
+  }
+
+  /** The nearest rival in reach and in front, for a hand-to-hand blow. */
+  meleeTarget(player) {
+    let best = null, bestD = DUEL.meleeRange;
+    for (const other of this.opponents(player)) {
+      if (other.hp <= 0) continue;
+      const d = Math.hypot(other.pos.x - player.pos.x, other.pos.z - player.pos.z);
+      const toward = Math.atan2(other.pos.x - player.pos.x, other.pos.z - player.pos.z);
+      if (d <= bestD && Math.cos(toward - player.facing) > DUEL.meleeArc) { best = other; bestD = d; }
+    }
+    return best;
+  }
+
+  /** Release of STRIKE with no ball in reach: a blow. Light taps chain; a charged release is heavy. */
+  melee(player, power, events) {
+    player.swingTimer = .32;
+    const target = this.meleeTarget(player);
+    const heavy = power >= DUEL.heavyThreshold;
+    if (!target) { player.hitCooldown = heavy ? .45 : .22; events.push({ type: 'whiff', player, melee: true }); return; }
+    const dir = new THREE.Vector3(target.pos.x - player.pos.x, 0, target.pos.z - player.pos.z).normalize();
+    const blocked = this.facingBlock(target, player.pos);
+    if (!heavy) {
+      const step = player.chainTimer > 0 ? Math.min(player.chain + 1, DUEL.light.length) : 1;
+      player.chain = step; player.chainTimer = DUEL.chainWindow;
+      player.hitCooldown = .16;
+      const finisher = step === DUEL.light.length;
+      if (blocked) { this.damage(target, DUEL.chip, player, events, { kind: 'light', blocked: true, push: dir.clone().multiplyScalar(.25) }); return; }
+      this.damage(target, DUEL.light[step - 1], player, events, { kind: finisher ? 'finisher' : 'light', stun: finisher ? DUEL.chainFinisherStun : DUEL.lightStun, push: dir.clone().multiplyScalar(finisher ? .9 : .3) });
+      if (finisher) player.chain = 0;
+      return;
+    }
+    player.hitCooldown = .5; player.chain = 0;
+    // In spirit form a full-power blow is the nawal's maul.
+    const sun = player.spirit > 0 && power > .85;
+    const jaguar = player.jaguar; player.jaguar = false;
+    if (sun) {
+      this.damage(target, DUEL.superDamage * (jaguar ? 1.3 : 1) / DUEL.spiritPower, player, events, { kind: 'super', stun: DUEL.superStun, push: dir.clone().multiplyScalar(2.6) });
+      return;
+    }
+    const amount = (DUEL.heavyBase + DUEL.heavyScale * power) * (jaguar ? 1.5 : 1);
+    if (blocked) {   // a heavy blow smashes through a guard, at half strength
+      this.damage(target, amount * .5, player, events, { kind: 'guardbreak', blocked: true, stun: DUEL.guardBreakStun, push: dir.clone().multiplyScalar(.8) });
+      return;
+    }
+    this.damage(target, amount, player, events, { kind: 'heavy', stun: DUEL.heavyStun, push: dir.clone().multiplyScalar(DUEL.heavyKnock) });
   }
 
   /** Fisher-Yates over player indices, driven by the world RNG so replays match. */
@@ -182,24 +344,36 @@ export class World {
       player.dash = Math.max(0, player.dash - dt);
       player.pos.addScaledVector(player.dashDir, (TACKLE_DISTANCE / TACKLE_DURATION) * dt);
       this.resolveTackleHits(player, events);
+    } else if (this.duel && player.hp <= 0) {
+      // Down and out.
     } else {
       const len = Math.hypot(input.mx, input.mz);
       let mx = input.mx, mz = input.mz;
       if (len > 1) { mx /= len; mz /= len; }
+      player.guard = this.duel && !!input.guard && player.charge < 0;
       if (len > .08) {
-        const chargeSlow = player.charge >= 0 ? .55 : 1;
+        const chargeSlow = player.charge >= 0 ? .55 : player.guard ? DUEL.guardSpeed : 1;
         player.pos.x += mx * player.moveSpeed * chargeSlow * dt;
         player.pos.z += mz * player.moveSpeed * chargeSlow * dt;
         const target = Math.atan2(mx, mz);
         const turn = Math.atan2(Math.sin(target - player.facing), Math.cos(target - player.facing));
-        if (player.swingTimer <= 0) player.facing += turn * (1 - Math.exp(-14 * dt));
+        if (player.swingTimer <= 0 && !this.duel) player.facing += turn * (1 - Math.exp(-14 * dt));
+      }
+      if (this.duel) {
+        // Lock-on: a duellist always squares up to the rival and strafes.
+        const rival = this.opponents(player)[0];
+        if (rival) {
+          const target = Math.atan2(rival.pos.x - player.pos.x, rival.pos.z - player.pos.z);
+          const turn = Math.atan2(Math.sin(target - player.facing), Math.cos(target - player.facing));
+          player.facing += turn * (1 - Math.exp(-16 * dt));
+        }
       }
       // Aim: explicit aim (mouse) wins, otherwise face direction with a soft bias toward the ring.
       if (typeof input.aim === 'number') player.aim = input.aim;
       else player.aim = player.facing;
 
       // Charge / release for smash and lob
-      const held = input.strike || input.lob;
+      const held = (input.strike || input.lob) && !player.guard;
       const kind = input.lob && !input.strike ? 'lob' : (input.lob && input.strike ? player.chargeKind : 'smash');
       if (held && player.charge < 0 && player.hitCooldown <= 0) { player.charge = 0; player.chargeKind = kind; }
       if (player.charge >= 0 && held) player.charge = Math.min(1, player.charge + dt / CHARGE_TIME);
@@ -210,6 +384,8 @@ export class World {
         // arrives still connects. Without this, charge-and-release feels like
         // it is swallowing inputs rather than rewarding timing.
         if (this.canStrike(player)) this.tryStrike(player, power, player.chargeKind, events);
+        else if (this.duel && player.chargeKind === 'lob') this.blast(player, power, events);
+        else if (this.duel && player.chargeKind === 'smash' && (this.meleeTarget(player) || this.ballDistance(player) > HIT_RANGE * 1.3)) this.melee(player, power, events);
         else if (this.ballDistance(player) > HIT_RANGE * 2.4) player.pendingStrike = null; // nowhere near: a cancel, not a flail
         else player.pendingStrike = { power, kind: player.chargeKind, time: STRIKE_BUFFER };
       }
@@ -217,6 +393,10 @@ export class World {
         player.pendingStrike.time -= dt;
         if (this.canStrike(player)) { const s = player.pendingStrike; player.pendingStrike = null; this.tryStrike(player, s.power, s.kind, events); }
         else if (player.pendingStrike.time <= 0) { player.pendingStrike = null; player.swingTimer = .45; player.hitCooldown = .22; events.push({ type: 'whiff', player }); }
+      }
+      if (this.duel && input.spirit && !player.prevInput.spirit && player.meter >= 100 && player.spirit <= 0) {
+        player.meter = 0; player.spirit = DUEL.spiritTime; player.stun = 0;
+        events.push({ type: 'transform', player });
       }
       if (input.tackle && !player.prevInput.tackle && player.tackleCooldown <= 0) {
         player.dash = TACKLE_DURATION;
@@ -239,6 +419,16 @@ export class World {
       if (tackler.tackleHits.has(other.id) || other.stun > 0) continue;
       if (other.pos.distanceTo(tackler.pos) < TACKLE_HIT_RADIUS) {
         tackler.tackleHits.add(other.id);
+        if (this.duel) {
+          // A guard facing the charge turns it aside and leaves the charger reeling.
+          if (this.facingBlock(other, tackler.pos)) {
+            tackler.dash = 0; tackler.stun = .55;
+            events.push({ type: 'hit', player: other, victim: tackler, damage: 0, kind: 'parry', blocked: true, pos: tackler.pos.clone().setY(1.3) });
+            continue;
+          }
+          this.damage(other, DUEL.tackleDamage, tackler, events, { kind: 'tackle', stun: STUN_TIME, push: tackler.dashDir.clone().multiplyScalar(1.1) });
+          continue;
+        }
         other.stun = STUN_TIME;
         other.charge = -1;
         other.pos.addScaledVector(tackler.dashDir, 1.1);
@@ -299,9 +489,18 @@ export class World {
     const profile = player.ai ? player.ai.profile : DIFFICULTY[this.difficulty];
     // Touch players aim with the stick alone, so they get a floor of help.
     const assist = player.ai ? profile.aiAssist : Math.max(profile.assist, this.humanAssistFloor || 0);
-    const angle = player.aim;
+    let angle = player.aim;
+    let ringAssist = assist;
+    if (this.duel && kind === 'smash') {
+      // A smash in a duel is thrown at the rival when roughly facing them.
+      const rival = this.opponents(player)[0];
+      if (rival) {
+        const toward = Math.atan2(rival.pos.x - ball.pos.x, rival.pos.z - ball.pos.z);
+        if (Math.cos(toward - angle) > .6) { angle = toward; ringAssist = 0; }
+      }
+    }
     const boost = player.jaguar ? 1.5 : 1;
-    const velocity = strikeVelocity({ position: ball.pos, angle, power: .45 + .55 * power, kind, ring: this.targetRing(player), assist, boost, gravityScale: ball.gravityScale });
+    const velocity = strikeVelocity({ position: ball.pos, angle, power: .45 + .55 * power, kind, ring: this.targetRing(player), assist: ringAssist, boost, gravityScale: ball.gravityScale });
     ball.vel.copy(velocity);
     ball.heldCooldown = .18;
     ball.lastTouch = player.team; ball.lastToucher = player.id; ball.struck = true;
@@ -359,7 +558,7 @@ export class World {
     return {
       t: this.time,
       ball: [b.pos.x, b.pos.y, b.pos.z, b.vel.x, b.vel.y, b.vel.z, b.gravityScale, b.shields.balam, b.shields.kuk, b.lastTouch || ''],
-      players: this.players.map((p) => [p.id, p.pos.x, p.pos.z, p.facing, p.speed, p.stun, p.charge, p.swingTimer, p.wind, p.jaguar ? 1 : 0, p.dash, p.tackleCooldown]),
+      players: this.players.map((p) => [p.id, p.pos.x, p.pos.z, p.facing, p.speed, p.stun, p.charge, p.swingTimer, p.wind, p.jaguar ? 1 : 0, p.dash, p.tackleCooldown, p.hp, p.guard ? 1 : 0, p.meter, p.hurt, p.spirit]),
       powerups: this.powerups.map((p) => [p.id, p.kind, p.pos.x, p.pos.z, p.life]),
       litRing: this.litRing,
       moon: this.moonTime,
@@ -372,7 +571,7 @@ export class World {
     b.gravityScale = s.ball[6]; b.shields.balam = s.ball[7]; b.shields.kuk = s.ball[8]; b.lastTouch = s.ball[9] || null;
     for (const row of s.players) {
       const p = this.byId(row[0]); if (!p) continue;
-      p.pos.set(row[1], 0, row[2]); p.facing = row[3]; p.speed = row[4]; p.stun = row[5]; p.charge = row[6]; p.swingTimer = row[7]; p.wind = row[8]; p.jaguar = !!row[9]; p.dash = row[10]; p.tackleCooldown = row[11];
+      p.pos.set(row[1], 0, row[2]); p.facing = row[3]; p.speed = row[4]; p.stun = row[5]; p.charge = row[6]; p.swingTimer = row[7]; p.wind = row[8]; p.jaguar = !!row[9]; p.dash = row[10]; p.tackleCooldown = row[11]; if (row.length > 12) { p.hp = row[12]; p.guard = !!row[13]; p.meter = row[14]; p.hurt = row[15]; p.spirit = row[16] || 0; }
     }
     this.powerups = s.powerups.map((row) => ({ id: row[0], kind: row[1], pos: new THREE.Vector3(row[2], 0, row[3]), life: row[4] }));
     this.litRing = s.litRing; this.moonTime = s.moon; this.time = s.t;

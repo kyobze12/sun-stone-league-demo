@@ -4,13 +4,15 @@ import { addRuins } from './ruins.js';
 import { createCourt, loadStoneTextures, loadEnvironment, loadIdol, updateCourt, addLighting } from './court.js';
 import { loadCharacterModel, loadSkins, loadAnimations, spawnRoster, animateCharacter, createCharacter, pruneClips } from './characters.js';
 import { ROSTER, DEFAULT_LOOK, lookById, savedLook, saveLook } from './roster.js';
+import { loadFighters, playMove, reviveFighter } from './fighters.js';
+import { DuelFx, NAWAL } from './duelfx.js';
 import { createRenderer, createComposer, createBall, updateBallVisual, Particles, PowerupVisuals, CameraRig, detectQuality, QUALITY } from './render.js';
 import { setupInput, readInput, resetInput, isTouch } from './input.js';
 import { World, EMPTY_INPUT } from './world.js';
 import { Match } from './match.js';
 import { NetSession } from './net.js';
 import { mayaNumeralSVG, CALLOUTS, pick } from './maya.js';
-import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE } from './config.js';
+import { TEAMS, POWERUPS, MODES, COURT_LENGTH, HIT_RANGE, DUEL } from './config.js';
 import { RINGS, GRAVITY, BALL_RADIUS } from './ball.js';
 import { Audio } from './audio.js';
 
@@ -56,6 +58,7 @@ lights.sun.shadow.mapSize.setScalar(QUALITY[quality].shadowSize);
 const ballMesh = createBall(scene);
 const particles = new Particles(scene, QUALITY[quality].particles);
 const powerupVisuals = new PowerupVisuals(scene);
+const duelFx = new DuelFx(scene, particles);
 const cameraRig = new CameraRig(camera);
 const audio = new Audio();
 
@@ -77,11 +80,15 @@ let characterSource = null;
   try { addRuins(scene, quality); } catch (error) { console.warn('[sun-stone-league] ruins skipped:', error); }
   cinematics = await addCinematics(scene, lights, quality, manager).catch(() => null);
   const missing = [];
-  try { await loadSkins(manager); } catch { missing.push('skins'); }
-  try { await loadAnimations(manager); } catch { missing.push('animations'); }
-  characterSource = await loadCharacterModel(manager, './assets/characters/player.glb').catch(() => null);
-  if (!characterSource) missing.push('fighter model');
-  pruneClips(characterSource);
+  // The KayKit fighters are the cast; the older single mesh is only a fallback.
+  const fighters = await loadFighters(manager).catch(() => false);
+  if (!fighters) {
+    try { await loadSkins(manager); } catch { missing.push('skins'); }
+    try { await loadAnimations(manager); } catch { missing.push('animations'); }
+    characterSource = await loadCharacterModel(manager, './assets/characters/player.glb').catch(() => null);
+    if (!characterSource) missing.push('fighter model');
+    pruneClips(characterSource);
+  }
   // Don't fail silently: the fallbacks still produce a playable game, but the
   // blocky stand-in fighters look like a bug rather than a degraded asset load.
   if (missing.length) {
@@ -192,7 +199,10 @@ function disposeCharacter(root) {
 function rebuildFighters() {
   for (const fighter of G.fighters.values()) { scene.remove(fighter.character); disposeCharacter(fighter.character); }
   G.fighters.clear();
-  const { fighters } = spawnRoster(scene, characterSource, G.world.players, looksFor(G.world.players));
+  const looks = looksFor(G.world.players);
+  const { fighters } = spawnRoster(scene, characterSource, G.world.players, looks);
+  for (const f of fighters) f.nawal = lookById(looks[f.id]).nawal;
+  duelFx.clear();
   for (const fighter of fighters) {
     const marker = new THREE.Mesh(new THREE.CircleGeometry(.52, 24), new THREE.MeshBasicMaterial({ color: TEAMS[fighter.team].color, transparent: true, opacity: .26, depthWrite: false }));
     marker.rotation.x = -Math.PI / 2; marker.position.y = .035; fighter.character.add(marker); fighter.marker = marker;
@@ -246,6 +256,22 @@ function startMode(mode, options = {}) {
   clearTimeout(G.hintTimer);
   G.hintTimer = setTimeout(() => $('hint').classList.add('faded'), 9000);
   if (mode === 'practice') startTutorial();
+  // Duel presentation: fighting-game HUD and the duel button set.
+  const duel = mode === 'duel';
+  $('duel-hud').classList.toggle('hidden', !duel);
+  $('hud').classList.toggle('hidden', duel);
+  $('touch-controls').classList.toggle('duel', duel);
+  $('lob-btn').textContent = duel ? 'FIRE' : 'LOB';
+  if (duel) {
+    const me = G.world.byId('balam-striker'), rival = G.world.byId('kuk-striker');
+    const looks = looksFor(G.world.players);
+    $('duel-name-a').textContent = lookById(looks[me.id]).name;
+    $('duel-name-b').textContent = lookById(looks[rival.id]).name;
+    $('hint').textContent = touch
+      ? 'Tap STRIKE: chain blows · hold: heavy · FIRE: blast · GUARD: block · ball in reach: throw it at them · fill the bar: NAWAL'
+      : 'Space: blows (hold = heavy) · E: fire blast · R: guard · Q: tackle · V: spirit form when the bar is full';
+    G.duelFx = { lagA: 1, lagB: 1 };
+  }
   G.match.countdown = 3;
   show('countdown', true); $('countdown-value').textContent = '3';
   audio.tone(480, .12);
@@ -314,7 +340,7 @@ function renderPicker(dt) {
   const rect = $('fighter-stage').getBoundingClientRect();
   if (rect.width < 10 || rect.height < 10) return;
   picker.spin += dt * .5;
-  picker.model.rotation.y = Math.PI + Math.sin(picker.spin) * .8;  // face the viewer, then sway
+  picker.model.rotation.y = (picker.model.userData.rig?.kind === 'clip' ? 0 : Math.PI) + Math.sin(picker.spin) * .8;  // face the viewer, then sway
   picker.model.userData.rig?.mixer?.update(dt);
   const cam = picker.camera;
   cam.aspect = rect.width / rect.height;
@@ -397,8 +423,28 @@ function tutorialTick(events) {
 
 // ------------------------------------------------------------ HUD
 let lastScore = { balam: -1, kuk: -1 };
+const duelHudCache = {};
+function setIf(key, apply, value) { if (duelHudCache[key] !== value) { duelHudCache[key] = value; apply(value); } }
+function updateDuelHUD(force) {
+  const m = G.match, world = G.world;
+  const a = world.byId('balam-striker'), b = world.byId('kuk-striker');
+  if (force) for (const k of Object.keys(duelHudCache)) delete duelHudCache[k];
+  for (const [p, side] of [[a, 'a'], [b, 'b']]) {
+    const frac = Math.max(0, p.hp / DUEL.hp);
+    setIf('hp' + side, (v) => { $('hp-' + side).style.transform = `scaleX(${v})`; $('hp-' + side).classList.toggle('low', v < .3); }, frac.toFixed(3));
+    setIf('lag' + side, (v) => { $('hp-lag-' + side).style.transform = `scaleX(${v})`; }, frac.toFixed(2));
+    setIf('meter' + side, (v) => { $('meter-' + side).style.width = v + '%'; $('meter-' + side).classList.toggle('full', v >= 100); }, Math.round(p.spirit > 0 ? p.spirit / DUEL.spiritTime * 100 : p.meter));
+    setIf('pips' + side, (v) => { $('pips-' + side).innerHTML = Array.from({ length: MODES.duel.target }, (_, i) => `<i class="${i < v ? 'won' : ''}"></i>`).join(''); }, m.score[p.team]);
+  }
+  setIf('time', (v) => { $('duel-time').textContent = v; }, Math.ceil(m.timeLeft));
+  setIf('round', (v) => { $('duel-round').textContent = `ROUND ${v}`; }, m.round);
+  const me = controlled();
+  if (me) setIf('spiritReady', (v) => $('spirit-btn').classList.toggle('ready', v), me.meter >= 100 && me.spirit <= 0);
+}
+
 function updateHUD(force = false) {
   const m = G.match; if (!m) return;
+  if (G.mode === 'duel') { updateDuelHUD(force); return; }
   for (const team of ['balam', 'kuk']) {
     if (force || m.score[team] !== lastScore[team]) {
       $('score-' + team).textContent = m.score[team];
@@ -430,7 +476,7 @@ function updateHUD(force = false) {
 // ------------------------------------------------------------ event presentation
 function wire(event) {
   const out = { type: event.type };
-  for (const key of ['kind', 'power', 'big', 'side', 'points', 'combo', 'text', 'winner', 'team']) if (event[key] !== undefined) out[key] = event[key];
+  for (const key of ['kind', 'power', 'big', 'side', 'points', 'combo', 'text', 'winner', 'team', 'damage', 'blocked', 'how', 'round', 'ringSide', 'id', 'melee']) if (event[key] !== undefined) out[key] = event[key];
   if (event.player) { out.player = event.player.id; out.team = event.team || event.player.team; }
   if (event.victim) out.victim = event.victim.id;
   if (event.pos) out.pos = [event.pos.x, event.pos.y, event.pos.z];
@@ -453,12 +499,53 @@ function present(events) {
         audio.strike(e.kind, e.power, e.big);
         if (e.big) { flash(); callout(pick(CALLOUTS.bigStrike), e.team); }
         else if (e.power > .85 || e.kind === 'lob') callout(pick(e.kind === 'lob' ? CALLOUTS.lob : CALLOUTS.strike), e.team);
-        const f = G.fighters.get(e.player); if (f) f.lastStrike = G.elapsed;
+        const f = G.fighters.get(e.player); if (f) { f.lastStrike = G.elapsed; playMove(f.rig, e.kind === 'lob' ? 'lob' : 'kick', { speed: 1.6 }); }
         if (isMe || e.big) G.hitstop = e.big ? .12 : .035 + e.power * .06;
         break;
       }
+      case 'hit': onDuelHit(e, pos, isMe); break;
+      case 'ko': {
+        const victim = G.fighters.get(e.victim);
+        playMove(victim?.rig, 'death', { hold: true });
+        flash(); callout('K.O.!', 'score'); audio.ring(); audio.crowd(1);
+        G.timeScale = .3; G.slowmo = 1.4; cameraRig.impact(.6);
+        break;
+      }
+      case 'blast': {
+        const f = G.fighters.get(e.player); playMove(f?.rig, 'blast', { speed: 1.8 });
+        audio.tone(180, .25, 'sawtooth', .06); particles.burst(pos, 0xff7a1a, 14, 4, 3);
+        break;
+      }
+      case 'blastEnd': particles.burst(pos, 0xffa040, 18, 5, 4); duelFx.drop(e.id); break;
+      case 'blastBall': audio.tone(300, .12, 'square', .05); break;
+      case 'transform': {
+        const f = G.fighters.get(e.player);
+        const spirit = NAWAL[f?.nawal] || NAWAL.jaguar;
+        playMove(f?.rig, 'transform', { speed: 2 });
+        const at = G.world.byId(e.player).pos.clone().setY(1.1);
+        particles.burst(at, spirit.glow, 60, 8, 6); particles.burst(at, 0xffffff, 20, 5, 4);
+        flash(); cameraRig.impact(.5); audio.drum(); audio.crowd(.8);
+        callout(`NAWAL — ${spirit.name.toUpperCase()}!`, e.team);
+        G.hitstop = .15;
+        break;
+      }
+      case 'spiritEnd': { const at = G.world.byId(e.player).pos.clone().setY(1); particles.burst(at, 0xd9b3ff, 24, 5, 4); break; }
+      case 'sunRing': flash(); callout('SUN-STONE FINISHER!', 'score'); audio.ring(); G.timeScale = .35; G.slowmo = .8; break;
+      case 'roundOver': {
+        if (e.how === 'time') callout('TIME!', 'score');
+        const roundText = !e.team ? 'DRAW' : controlled()?.team === e.team ? `YOU TAKE ROUND ${e.round}` : `RIVAL TAKES ROUND ${e.round}`;
+        setTimeout(() => { if (G.mode === 'duel' && G.match?.phase === 'goal' && !G.match.winner) callout(roundText, e.team || 'muted'); }, 1300);
+        if (e.winner) for (const f of G.fighters.values()) if (f.team === e.winner) setTimeout(() => playMove(f.rig, 'cheer'), 1200);
+        break;
+      }
+      case 'round': {
+        for (const f of G.fighters.values()) reviveFighter(f.rig);
+        duelFx.clear();
+        callout(`ROUND ${e.round}`, 'score'); show('countdown', true);
+        break;
+      }
       case 'whiff': if (isMe) { audio.tone(90, .08, 'square', .03); if (G.elapsed - (present.lastWhiff || -9) > 4 && (!G.tutorial || G.tutorial.step >= 1)) { present.lastWhiff = G.elapsed; callout('TOO FAR — GET NEXT TO THE BALL', 'muted'); } } break;
-      case 'tackle': audio.tackle(); if (e.player) particles.burst(G.world.byId(e.player).pos.clone().setY(.6), 0xffffff, 8, 3, 2); break;
+      case 'tackle': playMove(G.fighters.get(e.player)?.rig, 'dash', { speed: 1.4 }); audio.tackle(); if (e.player) particles.burst(G.world.byId(e.player).pos.clone().setY(.6), 0xffffff, 8, 3, 2); break;
       case 'steal': callout('STEAL!', e.team); audio.hit(); particles.burst(pos, 0xffffff, 20, 6, 4); cameraRig.impact(.3); break;
       case 'knockdown': audio.hit(); cameraRig.impact(.2); break;
       case 'rim': audio.tone(820, .12, 'triangle', .05); particles.burst(pos, 0xffd34e, 8, 3, 3); break;
@@ -476,12 +563,41 @@ function present(events) {
       case 'score': onScore(e); break;
       case 'suddenDeath': callout(pick(CALLOUTS.suddenDeath), 'muted'); audio.drum(); break;
       case 'callout': callout(e.text, e.kind || ''); break;
-      case 'play': show('countdown', false); audio.tone(720, .3, 'triangle', .08); break;
+      case 'play': if (G.mode === 'duel') callout('FIGHT!', 'score'); show('countdown', false); audio.tone(720, .3, 'triangle', .08); break;
       case 'resume': cameraRig.stopCinematic(); G.timeScale = 1; break;
       case 'ended': finishGame(); break;
       default: break;
     }
   }
+}
+
+// A landed (or blocked) blow in a duel: reaction animation, sparks, weight.
+function onDuelHit(e, pos, isMe) {
+  const attacker = G.fighters.get(e.player), victim = G.fighters.get(e.victim);
+  const byMe = isMe, toMe = G.localIds.includes(e.victim);
+  if (attacker && (e.kind === 'light' || e.kind === 'finisher' || e.kind === 'heavy' || e.kind === 'super' || e.kind === 'guardbreak')) {
+    const p = G.world.byId(e.player);
+    const move = e.kind === 'light' ? (p.chain === 2 ? 'punchB' : 'punchA') : e.kind === 'finisher' ? 'kick' : 'spin';
+    playMove(attacker.rig, move, { speed: e.kind === 'light' ? 1.8 : 1.3 });
+  }
+  if (e.blocked) {
+    playMove(victim?.rig, 'blockHit', { speed: 1.5 });
+    particles.burst(pos, 0x9fd8ff, e.kind === 'guardbreak' ? 30 : 10, 4, 3);
+    audio.tone(e.kind === 'guardbreak' ? 160 : 520, .1, 'square', .05);
+    if (e.kind === 'guardbreak') callout('GUARD BREAK!', e.team);
+    if (e.kind === 'parry') callout('TURNED ASIDE!', e.team);
+    return;
+  }
+  const big = e.damage >= 14 || e.kind === 'super' || e.kind === 'ring';
+  playMove(victim?.rig, big ? 'hitB' : 'hitA', { speed: 1.6 });
+  const color = e.kind === 'blast' ? 0xff7a1a : e.kind === 'super' ? 0xd9b3ff : 0xfff1c8;
+  particles.burst(pos, color, 10 + Math.min(40, e.damage * 2), big ? 7 : 4, big ? 5 : 3);
+  audio.hit(); if (big) audio.drum();
+  cameraRig.impact(big ? .35 : .1);
+  G.hitstop = Math.max(G.hitstop || 0, big ? .1 : .045);
+  if (e.kind === 'super') { flash(); callout('NAWAL MAUL!', e.team); }
+  else if (e.kind === 'finisher' && (byMe || toMe)) callout(byMe ? 'COMBO!' : 'COMBO TAKEN', e.team);
+  else if (e.kind === 'ball' && big) callout('BALL TO THE BODY!', e.team);
 }
 
 function onScore(e) {
@@ -623,7 +739,7 @@ function hostNetwork(dt, events) {
 }
 function guestNetwork() {
   if (!G.net?.conn) return;
-  const input = readInput('p1', { facing: facingOf(controlledId()), touch, arrowsAsP1: true });
+  const input = readInput('p1', { facing: facingOf(controlledId()), yaw: G.mode === 'duel' ? cameraRig.floorYaw : null, touch, arrowsAsP1: true });
   G.net.send({ t: 'in', i: input });
   G.net.ping();
   const snaps = G.guest.snapshots;
@@ -704,18 +820,20 @@ function tick() {
   if (world) {
     updateBallVisual(ballMesh, world.ball.pos, world.ball.vel, frameDt, world.ball.lastTouch ? TEAMS[world.ball.lastTouch].color : 0xff9b20);
     powerupVisuals.sync(world.powerups, G.elapsed);
+    if (G.mode === 'duel') duelFx.syncBlasts(world.projectiles, frameDt);
     for (const player of world.players) {
       const f = G.fighters.get(player.id); if (!f) continue;
       f.character.position.set(player.pos.x, 0, player.pos.z);
       f.character.rotation.y = player.facing;
-      animateCharacter(f.rig, player.speed, player.swingTimer, liveDt, G.elapsed, { stun: player.stun, dash: player.dash, charge: player.charge });
+      animateCharacter(f.rig, player.speed, player.swingTimer, liveDt, G.elapsed, { stun: player.stun, dash: player.dash, charge: player.charge, facing: player.facing, guard: player.guard, combat: G.mode === 'duel' });
       f.marker.material.opacity = G.localIds.includes(player.id) ? .5 : .22;
       f.marker.material.color.setHex(player.wind > 0 ? POWERUPS.wind.color : player.jaguar ? POWERUPS.jaguar.color : TEAMS[player.team].color);
       // Role tags only on fighters out in the court: one standing by the lens
       // would fill the screen, and your own needs no tag.
       const camDist = camera.position.distanceTo(f.character.position);
       const me0 = G.world.byId(controlledId());
-      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice' && !G.localIds.includes(player.id) && camDist > 9 && !(me0 && player.team === me0.team && G.mode === 'match');
+      if (G.mode === 'duel') duelFx.syncSpirit(f, player, liveDt, G.elapsed);
+      f.label.visible = !!G.mode && G.mode !== 'ringhunt' && G.mode !== 'practice' && G.mode !== 'duel' && !G.localIds.includes(player.id) && camDist > 9 && !(me0 && player.team === me0.team && G.mode === 'match');
       f.label.material.opacity = Math.min(.85, (camDist - 9) / 4);
     }
     // Goals: lit ring, shields, halo decay
@@ -739,7 +857,7 @@ function tick() {
       aimGroup.scale.setScalar(me.charge >= 0 ? 1 + me.charge * .35 : 1);
     } else aimGroup.visible = false;
     const camPlayer = me || world.players[0];
-    cameraRig.update(liveDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? facingOf(me.id) : 1, intro: !G.mode });
+    cameraRig.update(liveDt, { playerPos: camPlayer.pos, ballPos: world.ball.pos, facing: me ? facingOf(me.id) : 1, intro: !G.mode, rivalPos: G.mode === 'duel' && me ? world.opponents(me)[0]?.pos : null });
   }
   if (arena) updateCourt(arena, G.elapsed || performance.now() / 1000, QUALITY[quality].crowd ? crowd : null, G.excitement, idolMixers, frameDt);
   particles.update(frameDt);

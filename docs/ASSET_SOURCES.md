@@ -32,7 +32,22 @@ No files. The colonnades, stelae, rubble, ceiba trees, jungle skyline and
 distant pyramids are built in code (`src/ruins.js`), the stela glyph panels
 drawn on a canvas.
 
-## Characters
+## Fighters (current cast)
+
+| File | Source | Licence |
+| --- | --- | --- |
+| `public/assets/fighters/{balam,kuk,hunahpu,kot,sotz}.glb` | [KayKit Character Pack: Adventurers](https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0) by Kay Lousberg — Barbarian, Knight, Rogue, Mage, Rogue (hooded) | CC0 1.0 |
+| `public/assets/fighters/{kame,vucub}.glb` | [KayKit Character Pack: Skeletons](https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0) by Kay Lousberg — Skeleton Warrior, Skeleton Mage | CC0 1.0 |
+| `public/assets/fighters/moves.glb` | 28 animation clips from the Skeletons pack (shared rig) | CC0 1.0 |
+
+Prepared by `tools/import-kaykit.mjs`: weapons and props removed, animations
+split into one shared library, and each colour atlas repainted into that
+fighter's Maya palette. Headdresses are added in code (`src/roster.js`). The
+spirit beasts (nawal) and fire blasts are built in code (`src/duelfx.js`).
+
+## Characters (fallback)
+
+Used only if the KayKit fighters fail to load.
 
 | File | Source | Licence |
 | --- | --- | --- |

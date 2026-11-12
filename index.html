@@ -41,6 +41,7 @@
         <div class="mode-grid">
           <button class="mode-btn" data-mode="practice"><span class="mode-icon">✦</span><strong>Learn to Play</strong><span>Guided practice on an empty court</span></button>
           <button class="mode-btn primary" data-mode="match"><span class="mode-icon">⚔</span><strong>Ballcourt Match</strong><span>2v2 vs AI · first to 15 or 3 minutes</span></button>
+          <button class="mode-btn duel" data-mode="duel"><span class="mode-icon">☠</span><strong>Xibalba Duel</strong><span>1v1 fight · fire, spirits, the ball as a weapon</span></button>
           <button class="mode-btn" data-mode="ringhunt"><span class="mode-icon">◎</span><strong>Ring Hunt</strong><span>75 seconds · chain rings for combos</span></button>
           <button class="mode-btn" data-mode="local2p"><span class="mode-icon">⚑</span><strong>Local 2P</strong><span>Two players, one keyboard</span></button>
           <button class="mode-btn" data-mode="online"><span class="mode-icon">⟐</span><strong>Online 2P</strong><span>Host a room code or join a friend</span></button>
@@ -132,6 +133,20 @@
       </div>
     </div>
 
+    <div id="duel-hud" class="hidden" aria-live="polite">
+      <div class="duel-side" id="duel-a">
+        <div class="duel-top"><span class="duel-name" id="duel-name-a">You</span><span class="pips" id="pips-a"></span></div>
+        <div class="hp"><div class="hp-lag" id="hp-lag-a"></div><div class="hp-fill" id="hp-a"></div></div>
+        <div class="meter"><div class="meter-fill" id="meter-a"></div><span class="meter-label">NAWAL</span></div>
+      </div>
+      <div id="duel-clock"><div id="duel-time">60</div><div id="duel-round">ROUND 1</div></div>
+      <div class="duel-side right" id="duel-b">
+        <div class="duel-top"><span class="pips" id="pips-b"></span><span class="duel-name" id="duel-name-b">Rival</span></div>
+        <div class="hp"><div class="hp-lag" id="hp-lag-b"></div><div class="hp-fill" id="hp-b"></div></div>
+        <div class="meter"><div class="meter-fill" id="meter-b"></div></div>
+      </div>
+    </div>
+
     <div id="status-strip" class="hidden">
       <div id="charge-wrap"><div class="charge-label">POWER</div><div class="charge-track"><div id="charge-fill"></div></div></div>
       <div id="effects"></div>
@@ -144,6 +159,8 @@
     <div id="touch-controls" class="hidden">
       <div id="joystick"><div id="joystick-knob"></div></div>
       <div class="touch-buttons">
+        <button id="spirit-btn" class="touch-btn small spirit" aria-label="Transform into your animal spirit">NAWAL</button>
+        <button id="guard-btn" class="touch-btn small guard" aria-label="Guard (hold)">GUARD</button>
         <button id="tackle-btn" class="touch-btn small" aria-label="Tackle (shoulder charge)">TACKLE</button>
         <button id="lob-btn" class="touch-btn small" aria-label="Lob the ball">LOB</button>
         <button id="strike-btn" class="touch-btn big" aria-label="Strike the ball (hold to charge)">STRIKE</button>

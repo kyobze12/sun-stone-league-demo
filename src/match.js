@@ -1,4 +1,4 @@
-import { MODES, POINTS, OTHER_TEAM } from './config.js';
+import { MODES, POINTS, OTHER_TEAM, DUEL } from './config.js';
 import { ringFor } from './ball.js';
 
 /**
@@ -24,7 +24,9 @@ export class Match {
     this.lastScoreTeam = null;
     this.serveSide = 0;
     this.scoreTimeScale = 1;
-    this.stats = { strikes: 0, rings: 0, tackles: 0, longestCombo: 0 };
+    this.stats = { strikes: 0, rings: 0, tackles: 0, longestCombo: 0, hits: 0, kos: 0 };
+    this.duel = mode === 'duel';
+    this.round = 1;
   }
 
   get timed() { return this.def.duration > 0; }
@@ -43,12 +45,19 @@ export class Match {
       this.goalTimer -= dt;
       if (this.goalTimer <= 0) {
         if (this.winner) { this.phase = 'ended'; events.push({ type: 'ended', winner: this.winner }); }
-        else { this.world.resetPositions(this.serveSide); this.world.frozen = false; this.phase = 'playing'; events.push({ type: 'resume' }); }
+        else if (this.duel) {
+          this.round += 1;
+          this.world.resetRound(); this.world.frozen = false;
+          this.timeLeft = this.def.duration;
+          this.phase = 'countdown'; this.countdown = 2;
+          events.push({ type: 'round', round: this.round });
+        } else { this.world.resetPositions(this.serveSide); this.world.frozen = false; this.phase = 'playing'; events.push({ type: 'resume' }); }
       }
       return events;
     }
     if (this.phase !== 'playing') return events;
 
+    if (this.duel) return this.updateDuel(dt, worldEvents, events);
     if (this.timed) {
       this.timeLeft = Math.max(0, this.timeLeft - dt);
       if (this.timeLeft === 0) {
@@ -66,6 +75,55 @@ export class Match {
       else if (event.type === 'backline') this.onBackline(event, events);
       else if (event.type === 'doubleBounce') this.onDoubleBounce(event, events);
     }
+    return events;
+  }
+
+  // ------------------------------------------------------------ duel rounds
+  updateDuel(dt, worldEvents, events) {
+    const world = this.world;
+    this.timeLeft = Math.max(0, this.timeLeft - dt);
+    for (const event of worldEvents) {
+      if (event.type === 'strike') this.stats.strikes += 1;
+      if (event.type === 'tackle') this.stats.tackles += 1;
+      if (event.type === 'hit' && event.damage > 0) this.stats.hits += 1;
+      if (event.type === 'ring') {
+        // Threading the rival's ring is the Sun-Stone finisher: a crushing blow
+        // to whoever defends it, wherever they stand.
+        world.ball.scored = false; world.ball.pendingPass[event.ring.id] = 0;
+        const victim = world.players.find((p) => p.team === event.ring.defender);
+        const attacker = world.players.find((p) => p.team !== event.ring.defender);
+        this.stats.rings += 1;
+        events.push({ type: 'sunRing', team: attacker?.team, ringSide: event.ring.side });
+        if (victim) world.damage(victim, DUEL.ringDamage, attacker, worldEvents, { kind: 'ring', stun: 1 });
+        const ko = worldEvents.find((e) => e.type === 'ko');
+        if (ko) { this.stats.kos += 1; return this.roundOver(ko.player?.team || attacker.team, 'ko', events); }
+      } else if (event.type === 'backline' || event.type === 'doubleBounce') {
+        world.ball.scored = false;   // no line calls in a duel; the ball stays live
+      } else if (event.type === 'ko') {
+        this.stats.kos += 1;
+        return this.roundOver(event.player?.team || OTHER_TEAM[event.victim.team], 'ko', events);
+      }
+    }
+    if (this.timeLeft === 0) {
+      const [a, b] = world.players;
+      const winner = a.hp === b.hp ? null : (a.hp > b.hp ? a.team : b.team);
+      return this.roundOver(winner, 'time', events);
+    }
+    return events;
+  }
+
+  roundOver(team, how, events) {
+    if (team) this.score[team] += 1;
+    else { this.score.balam += 1; this.score.kuk += 1; }   // a draw scores for both
+    const target = this.def.target;
+    if (this.score.balam >= target || this.score.kuk >= target) {
+      this.winner = this.score.balam === this.score.kuk ? (team || 'balam') : (this.score.balam > this.score.kuk ? 'balam' : 'kuk');
+    }
+    this.phase = 'goal';
+    this.world.frozen = how !== 'ko';     // a KO plays out the fall
+    this.goalTimer = how === 'ko' ? 3 : 2.2;
+    this.lastScoreTeam = team;
+    events.push({ type: 'roundOver', team, how, round: this.round, score: { ...this.score }, winner: this.winner });
     return events;
   }
 
@@ -129,7 +187,7 @@ export class Match {
   }
 
   snapshot() {
-    return { score: { ...this.score }, timeLeft: this.timeLeft, phase: this.phase, countdown: this.countdown, suddenDeath: this.suddenDeath, winner: this.winner, combo: this.combo, comboTimer: this.comboTimer };
+    return { score: { ...this.score }, timeLeft: this.timeLeft, phase: this.phase, countdown: this.countdown, suddenDeath: this.suddenDeath, winner: this.winner, combo: this.combo, comboTimer: this.comboTimer, round: this.round };
   }
-  applySnapshot(s) { Object.assign(this.score, s.score); this.timeLeft = s.timeLeft; this.phase = s.phase; this.countdown = s.countdown; this.suddenDeath = s.suddenDeath; this.winner = s.winner; this.combo = s.combo; this.comboTimer = s.comboTimer; }
+  applySnapshot(s) { Object.assign(this.score, s.score); this.timeLeft = s.timeLeft; this.phase = s.phase; this.countdown = s.countdown; this.suddenDeath = s.suddenDeath; this.winner = s.winner; this.combo = s.combo; this.comboTimer = s.comboTimer; if (s.round) this.round = s.round; }
 }

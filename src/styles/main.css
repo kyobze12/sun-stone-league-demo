@@ -88,7 +88,7 @@ button:disabled { opacity: .5; cursor: default; }
   .fighters-panel h2 { font-size: 22px; }
   .pick-blurb { font-size: 12px; margin: 4px 0 8px; min-height: 0; }
   .pick-note { display: none; }
-  .fighter-cards { gap: 6px; }
+  .fighter-cards { gap: 6px; grid-template-columns: repeat(4, 1fr); }
   .fighter-card { padding: 6px 2px; font-size: 11px; }
   .fighter-card .fighter-swatch { width: 26px; height: 26px; }
   .fighter-btn { min-height: 48px; padding: 6px 12px; margin: 2px 0 6px; }
@@ -178,6 +178,18 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 .touch-buttons { position: absolute; right: calc(18px + var(--safe-right)); bottom: calc(22px + var(--safe-bottom)); display: grid; grid-template-columns: 76px 76px; grid-template-rows: 76px 76px; gap: 10px; pointer-events: auto; }
 .touch-btn { border-radius: 50%; font-size: 12px; letter-spacing: .08em; padding: 0; min-height: 0; touch-action: none; user-select: none; -webkit-user-select: none; }
 .touch-btn.big { grid-column: 2; grid-row: 1 / span 2; width: 100%; height: 100%; align-self: center; border-radius: 40px; font-size: 15px; background: linear-gradient(180deg, #ffb24a, #b85d12); }
+#tackle-btn { grid-column: 1; grid-row: 1; }
+#lob-btn { grid-column: 1; grid-row: 2; }
+#guard-btn, #spirit-btn { display: none; }
+/* Duel layout: STRIKE under the thumb, GUARD right beside it, TACKLE above,
+   FIRE and NAWAL on the inner column. */
+#touch-controls.duel .touch-buttons { grid-template-columns: 76px 76px 76px; }
+#touch-controls.duel #guard-btn { display: block; grid-column: 2; grid-row: 2; background: linear-gradient(180deg, #3e5a6a, #1c2c36); }
+#touch-controls.duel #tackle-btn { grid-column: 2; grid-row: 1; }
+#touch-controls.duel #lob-btn { grid-column: 1; grid-row: 2; background: linear-gradient(180deg, #ff7a2a, #a8300c); color: #fff3cf; }
+#touch-controls.duel #spirit-btn { display: block; grid-column: 1; grid-row: 1; opacity: .35; background: linear-gradient(180deg, #6a3aa8, #2a1450); color: #f4e6ff; }
+#touch-controls.duel #spirit-btn.ready { opacity: 1; box-shadow: 0 0 0 3px #d9b3ff, 0 0 20px 6px rgba(190,140,255,.6), 0 5px 0 #1a0d07; animation: strike-ready .6s ease-in-out infinite alternate; }
+#touch-controls.duel .touch-btn.big { grid-column: 3; }
 .touch-btn.small { width: 76px; height: 76px; background: linear-gradient(180deg, #5c4030, #2e1c12); color: var(--sand); box-shadow: 0 5px 0 #1a0d07; }
 #lob-btn { grid-column: 1; grid-row: 2; background: linear-gradient(180deg, #2fc5a9, #137561); color: #042a22; }
 #tackle-btn { grid-column: 1; grid-row: 1; }
@@ -221,6 +233,8 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
   .mode-btn span:last-child { display: none; }
   #joystick { width: 112px; height: 112px; }
   .touch-buttons { grid-template-columns: 64px 64px; grid-template-rows: 64px 64px; gap: 8px; }
+  #touch-controls.duel .touch-buttons { grid-template-columns: 58px 64px 64px; }
+  #touch-controls.duel #spirit-btn, #touch-controls.duel #lob-btn { width: 58px; height: 58px; font-size: 11px; }
   .touch-btn.small { width: 64px; height: 64px; }
   /* In-match HUD: a slim broadcast bar instead of three tall cards, so the
      fighters keep the middle of a 390px-tall screen. */
@@ -244,3 +258,35 @@ select { font-family: var(--body); font-weight: 700; background: #1b0f08; color:
 #hint { transition: opacity .6s; }
 #hint.faded { opacity: 0; }
 @media (orientation: portrait) and (pointer: coarse) { #rotate-hint { display: block; } }
+
+/* ---------------------------------------------------------------- duel HUD */
+#duel-hud { position: absolute; top: calc(8px + var(--safe-top)); left: calc(12px + var(--safe-left)); right: calc(64px + var(--safe-right)); display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: start; z-index: 20; pointer-events: none; }
+.duel-side { display: flex; flex-direction: column; gap: 4px; }
+.duel-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.duel-side.right .duel-top { flex-direction: row; }
+.duel-name { font-family: var(--display); font-weight: 800; letter-spacing: .08em; font-size: 15px; color: #fff3cf; text-shadow: 0 2px 0 #2a1406; text-transform: uppercase; }
+.hp { position: relative; height: 16px; border-radius: 3px; background: rgba(20,8,4,.8); border: 1px solid rgba(244,194,74,.6); overflow: hidden; transform: skewX(-14deg); }
+.duel-side.right .hp { transform: skewX(14deg); }
+.hp-fill, .hp-lag { position: absolute; top: 0; bottom: 0; left: 0; width: 100%; transform-origin: left; }
+.duel-side.right .hp-fill, .duel-side.right .hp-lag { transform-origin: right; }
+.hp-lag { background: #f2e1b8; transition: transform .6s .25s; }
+.hp-fill { background: linear-gradient(180deg, #ffd166, #e2861a 55%, #a8430c); }
+.hp-fill.low { background: linear-gradient(180deg, #ff6b4a, #c0201a); }
+.meter { position: relative; height: 6px; width: 70%; border-radius: 3px; background: rgba(20,8,4,.7); overflow: hidden; }
+.duel-side.right .meter { align-self: flex-end; }
+.meter-fill { height: 100%; width: 0; background: linear-gradient(90deg, #8a4cff, #e0b3ff); }
+.meter-fill.full { background: linear-gradient(90deg, #ffd166, #fff3cf, #d9b3ff); box-shadow: 0 0 10px #d9b3ff; }
+.meter-label { position: absolute; left: 4px; top: -1px; font-size: 6px; letter-spacing: .2em; color: rgba(255,255,255,.5); }
+.pips { display: flex; gap: 4px; }
+.pips i { width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid var(--gold); display: inline-block; }
+.pips i.won { background: var(--gold); box-shadow: 0 0 8px var(--gold); }
+#duel-clock { text-align: center; padding: 2px 12px; border-radius: 8px; background: rgba(20,8,4,.75); border: 1px solid rgba(244,194,74,.5); }
+#duel-time { font-family: var(--display); font-size: 26px; font-weight: 800; color: #fff3cf; line-height: 1.1; }
+#duel-round { font-size: 9px; letter-spacing: .2em; color: var(--gold); }
+.mode-btn.duel { background: linear-gradient(180deg, #4a1a2a, #200810); box-shadow: 0 5px 0 #130903, inset 0 0 0 1px rgba(255,120,80,.35); }
+@media (max-height: 460px) and (orientation: landscape) {
+  #duel-hud { top: calc(4px + var(--safe-top)); gap: 10px; }
+  .hp { height: 12px; }
+  .duel-name { font-size: 12px; }
+  #duel-time { font-size: 20px; }
+}

@@ -63,6 +63,33 @@ export const MODES = Object.freeze({
   ringhunt: { id: 'ringhunt', title: 'Ring Hunt', duration: 75, target: 0 },
   local2p:  { id: 'local2p', title: 'Local 2P', duration: 180, target: 15 },
   online:   { id: 'online', title: 'Online 2P', duration: 180, target: 15 },
+  duel:     { id: 'duel', title: 'Xibalba Duel', duration: 60, target: 2 },   // per-round clock; rounds to win
+});
+
+// Xibalba Duel: the ballgame as a fight. In the Popol Vuh the Hero Twins
+// played the lords of the underworld for their lives; here the court is the
+// arena, the rubber ball is a weapon, and the ring is a finisher.
+export const DUEL = Object.freeze({
+  hp: 150,
+  meleeRange: 2.1,          // reach of a hand/hip blow
+  meleeArc: 0.35,           // cos of the half-angle in front that a blow covers (~70°)
+  light: [4, 5, 8],         // the three hits of a light chain
+  chainWindow: 0.65,        // seconds to continue a chain
+  lightStun: 0.24, chainFinisherStun: 0.5,
+  heavyBase: 10, heavyScale: 14, heavyStun: 0.7, heavyKnock: 1.6,
+  heavyThreshold: 0.4,      // charge at release above which a blow is heavy
+  superDamage: 30, superStun: 1.1,
+  guardBreakStun: 0.8, chip: 1,
+  guardSpeed: 0.45,
+  tackleDamage: 8,
+  ballMinSpeed: 7, ballDamagePerSpeed: 1.3, ballDamageMax: 28, ballKnockdown: 18,
+  ringDamage: 40,           // threading the rival's ring: the Sun-Stone finisher
+  meterOnHit: 0.7, meterOnHurt: 0.45,
+  // K'ak' — fire blast: release LOB with no ball in reach
+  blastSpeed: 17, blastBase: 7, blastScale: 9, blastCooldown: 1.6, blastLife: 1.4, blastRadius: 0.95,
+  // Nawal — spirit form: when the Sun meter is full, transform into your animal spirit
+  spiritTime: 9, spiritSpeed: 1.35, spiritPower: 1.4, spiritArmor: 0.7,
+  spawnZ: 3.6,
 });
 
 export const POWERUPS = Object.freeze({

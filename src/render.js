@@ -242,7 +242,7 @@ export class CameraRig {
     return THREE.MathUtils.clamp(vertical, 42, 74);
   }
 
-  update(dt, { playerPos, ballPos, facing = 1, intro = false }) {
+  update(dt, { playerPos, ballPos, facing = 1, intro = false, rivalPos = null }) {
     if (dt <= 0) return;
     this.time += dt;
     const aspect = this.camera.aspect;
@@ -258,6 +258,8 @@ export class CameraRig {
       this.lookTarget.copy(c.center);
       follow(this.position, this.desired, 2.2, dt);
       follow(this.look, this.lookTarget, 4, dt);
+    } else if (rivalPos) {
+      this.duelFrame(dt, playerPos, rivalPos, portrait, short);
     } else if (intro) {
       const t = this.time;
       this.desired.set(Math.sin(t * .12) * 13, 7.5 + Math.sin(t * .09) * 1.5, Math.cos(t * .12) * 17);
@@ -317,6 +319,39 @@ export class CameraRig {
     const fov = this.fovFor(aspect) + (this.reducedMotion ? 0 : this.fovKick);
     if (Math.abs(this.camera.fov - fov) > .05) { this.camera.fov = fov; this.camera.updateProjectionMatrix(); }
   }
+
+  /**
+   * Lock-on duel camera: behind your fighter's shoulder, looking past them at
+   * the rival, pulling back as the gap opens so both stay in frame.
+   */
+  duelFrame(dt, playerPos, rivalPos, portrait, short) {
+    if (!this.primed) { this.player.copy(playerPos); this.primed = true; this.yaw = Math.atan2(rivalPos.x - playerPos.x, rivalPos.z - playerPos.z); }
+    follow(this.player, playerPos, 10, dt);
+    const dx = rivalPos.x - this.player.x, dz = rivalPos.z - this.player.z;
+    const gap = Math.hypot(dx, dz);
+    const target = Math.atan2(dx, dz);
+    // Smooth the yaw; swing faster when the rival circles quickly past.
+    const turn = Math.atan2(Math.sin(target - this.yaw), Math.cos(target - this.yaw));
+    this.yaw += turn * (1 - Math.exp(-(gap < 2.5 ? 2.5 : 4.5) * dt));
+    const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+    const back = (portrait ? 6.6 : short ? 5.6 : 5.8) + Math.min(gap, 12) * .3;
+    const shoulder = portrait ? .5 : 1.7;   // off the shoulder, so your fighter never hides the rival
+    const height = (portrait ? 3.6 : 2.9) + Math.min(gap, 12) * .12;
+    let x = this.player.x - fx * back - fz * shoulder;
+    let z = this.player.z - fz * back + fx * shoulder;
+    // Keep the lens over the court: past the edge, rise instead of clipping stone.
+    const overX = Math.max(0, Math.abs(x) - 6.4), overZ = Math.max(0, Math.abs(z) - (COURT_LENGTH / 2 - 1.2));
+    x = THREE.MathUtils.clamp(x, -6.4 - overX * .3, 6.4 + overX * .3);
+    z = THREE.MathUtils.clamp(z, -(COURT_LENGTH / 2 - 1.2), COURT_LENGTH / 2 - 1.2);
+    this.desired.set(x, height + (overX + overZ) * .8, z);
+    const mid = this.player.clone().lerp(rivalPos, .55);
+    this.lookTarget.set(mid.x, 1.25, mid.z);
+    follow(this.position, this.desired, 6, dt);
+    follow(this.look, this.lookTarget, 8, dt);
+  }
+
+  /** Floor direction the camera faces — controls map to it in a duel. */
+  get floorYaw() { return Math.atan2(this.look.x - this.position.x, this.look.z - this.position.z); }
 
   startCinematic(center, side) { this.cinematic = { center: center.clone(), time: 0, side, offset: (Math.random() - .5) * 1.2 }; }
   stopCinematic() { this.cinematic = null; }

@@ -163,3 +163,119 @@ export class AIController {
 }
 
 export { TACKLE_HIT_RADIUS };
+
+/**
+ * Duel AI: a fighter, not a ballplayer. It closes distance, mixes light
+ * chains with charged blows, guards when it sees a wind-up, tackles a rival
+ * who turtles, and takes the ball when it drops within reach to throw it at
+ * you (or lob for the ring when it has room).
+ *
+ * Difficulty comes from the same profile: reaction sets how often it reads the
+ * situation, `tackle` doubles as aggression and `charge` as how well it reads
+ * your wind-ups.
+ */
+export class DuelAI {
+  constructor(player, profile, random) {
+    this.player = player; this.profile = profile; this.random = random;
+    this.reset();
+  }
+
+  reset() {
+    this.think = 0; this.plan = 'approach';
+    this.hold = 0; this.holdFor = 0; this.kind = 'smash';
+    this.guardFor = 0; this.strafe = this.random() > .5 ? 1 : -1;
+    this.tap = false;
+    this.input = { mx: 0, mz: 0, aim: null, strike: false, lob: false, tackle: false, guard: false };
+  }
+
+  decide(world, dt) {
+    const me = this.player, ball = world.ball, rival = world.opponents(me)[0];
+    const input = { mx: 0, mz: 0, aim: null, strike: false, lob: false, tackle: false, guard: false };
+    if (!rival || me.hp <= 0) return (this.input = input);
+    const toRival = new THREE.Vector3(rival.pos.x - me.pos.x, 0, rival.pos.z - me.pos.z);
+    const dist = toRival.length();
+    toRival.normalize();
+    const side = new THREE.Vector3(toRival.z, 0, -toRival.x);
+    const ballFlat = Math.hypot(ball.pos.x - me.pos.x, ball.pos.z - me.pos.z);
+    const ballLow = ball.pos.y < HIT_MAX_HEIGHT;
+
+    this.think -= dt;
+    if (this.think <= 0) {
+      this.think = this.profile.reaction * (.7 + this.random() * .6);
+      const read = this.profile.charge;              // how well it reads your wind-up
+      const aggression = .35 + this.profile.tackle * .5;
+      if (rival.charge >= .25 && dist < 3 && this.random() < read * .8) { this.plan = 'guard'; this.guardFor = .35 + this.random() * .4; }
+      else if (world.projectiles.some((f) => f.owner !== me.id && Math.hypot(f.pos.x - me.pos.x, f.pos.z - me.pos.z) < 6) && this.random() < read * .7) { this.plan = 'guard'; this.guardFor = .4; }
+      else if (dist > 4.5 && me.blastCooldown <= 0 && this.random() < .35 + aggression * .3) { this.plan = 'blast'; this.holdFor = .1 + this.random() * .5; this.hold = 0; this.kind = 'lob'; }
+      else if (ballLow && ballFlat < 4 && dist > 3.5 && this.random() < .7) this.plan = 'ball';
+      else if (dist > 2.3) this.plan = 'approach';
+      else if (rival.guard && this.random() < .5) this.plan = this.random() < .5 ? 'heavy' : 'tackle';
+      else if (this.random() < aggression) this.plan = this.random() < .65 ? 'light' : 'heavy';
+      else { this.plan = 'circle'; this.strafe = this.random() > .5 ? 1 : -1; }
+      if (this.plan === 'heavy') { this.holdFor = .45 + this.random() * .4; this.hold = 0; }
+      if (this.plan === 'light') this.tap = true;
+    }
+
+    // Keep holding a heavy wind-up across frames even if the plan is re-read.
+    if (me.charge >= 0 && this.plan !== 'guard') {
+      this.hold += dt;
+      const holding = this.hold < this.holdFor;
+      if (this.kind === 'lob') input.lob = holding; else input.strike = holding;
+      if (!holding) this.kind = 'smash';
+      input.mx = toRival.x * .4; input.mz = toRival.z * .4;
+      return (this.input = input);
+    }
+
+    if (me.meter >= 100 && me.spirit <= 0 && this.random() < .02 + this.profile.tackle * .02) input.spirit = true;
+    switch (this.plan) {
+      case 'blast':
+        input.lob = true; input.mx = side.x * this.strafe * .3; input.mz = side.z * this.strafe * .3;
+        this.plan = 'circle';
+        break;
+      case 'guard':
+        input.guard = true; this.guardFor -= dt;
+        input.mx = -toRival.x * .3; input.mz = -toRival.z * .3;
+        if (this.guardFor <= 0) this.plan = 'circle';
+        break;
+      case 'ball': {
+        input.mx = (ball.pos.x - me.pos.x); input.mz = (ball.pos.z - me.pos.z);
+        if (world.canStrike(me)) {
+          // Throw it at the rival; with room and a clear look at the ring, lob for the finisher.
+          const ring = me.ring; const toRing = Math.hypot(ring.x - me.pos.x, ring.z - me.pos.z);
+          if (toRing < 13 && this.random() < .25) { input.lob = true; this.kind = 'lob'; }
+          else { input.strike = true; this.kind = 'smash'; }
+          this.hold = 0; this.holdFor = .25 + this.random() * .35; this.plan = 'release';
+        }
+        break;
+      }
+      case 'release':
+        input.strike = false; input.lob = false; this.plan = 'approach';
+        break;
+      case 'approach':
+        input.mx = toRival.x + side.x * .25 * this.strafe; input.mz = toRival.z + side.z * .25 * this.strafe;
+        if (dist > 6 && this.random() < this.profile.tackle * .01) input.tackle = false;
+        break;
+      case 'light':
+        if (dist > 1.9) { input.mx = toRival.x; input.mz = toRival.z; }
+        else if (this.tap) { input.strike = true; this.tap = false; this.hold = 0; this.holdFor = .04; }      // press...
+        else { this.tap = me.chain < 3 && this.random() < .6; }              // ...release, maybe chain
+        break;
+      case 'heavy':
+        if (dist > 1.9) { input.mx = toRival.x; input.mz = toRival.z; }
+        else { input.strike = true; this.hold = 0; }
+        break;
+      case 'tackle':
+        input.tackle = !me.prevInput.tackle && me.tackleCooldown <= 0;
+        this.plan = 'circle';
+        break;
+      default:   // circle
+        input.mx = side.x * this.strafe * .8 + toRival.x * (dist - 2.2) * .3;
+        input.mz = side.z * this.strafe * .8 + toRival.z * (dist - 2.2) * .3;
+    }
+    const len = Math.hypot(input.mx, input.mz);
+    if (len > 1) { input.mx /= len; input.mz /= len; }
+    input.mx *= this.profile.speed > 1 ? 1 : this.profile.speed + .05;
+    input.mz *= this.profile.speed > 1 ? 1 : this.profile.speed + .05;
+    return (this.input = input);
+  }
+}
